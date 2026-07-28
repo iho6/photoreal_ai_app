@@ -1,0 +1,55 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Runtime data (keep directory markers)
+data/models/**
+!data/models/.gitkeep
+data/inputs/**
+!data/inputs/.gitkeep
+data/outputs/**
+!data/outputs/.gitkeep
+data/workspace/**
+!data/workspace/.gitkeep
+
+# Model weights / large binaries
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.onnx
+*.gguf
+
+# Node / web
+node_modules/
+web/.next/
+web/dist/
+web/out/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/

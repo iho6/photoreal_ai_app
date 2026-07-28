@@ -1,0 +1,1 @@
+"""Vision / VLM pipeline placeholders."""

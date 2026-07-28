@@ -1,0 +1,3 @@
+"""Photoreal — hybrid generative AI orchestration package."""
+
+__version__ = "0.1.0"
