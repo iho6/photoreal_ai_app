@@ -43,3 +43,7 @@ flowchart TB
 - Pipeline module = verb/task: `image_edit.py`, not `qwen_edit_service`.
 - Backend/model names live inside the pipeline implementation, not in folder names.
 - New ability = one file under `pipelines/<domain>/` (+ optional `workers/<name>.py`).
+
+## First ability
+
+- **`photoreal_gen`** — Klein 9B Base + LoRAs via unmodified `runtime/comfyui`. See [photoreal_gen.md](photoreal_gen.md).

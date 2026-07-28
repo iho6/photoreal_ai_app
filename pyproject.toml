@@ -12,6 +12,19 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+# Glue only — install ComfyUI deps separately from runtime/comfyui/requirements.txt
+photoreal-gen = [
+    "huggingface_hub>=0.26.0",
+    "httpx>=0.27.0",
+    "websocket-client>=1.8.0",
+]
+vlm = [
+    "huggingface_hub>=0.26.0",
+    "transformers>=4.57.0",
+    "accelerate>=1.0.0",
+    "torchvision>=0.19.0",
+    "Pillow>=10.0.0",
+]
 
 [project.scripts]
 photoreal = "photoreal.cli.main:main"
@@ -19,6 +32,9 @@ photoreal = "photoreal.cli.main:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["photoreal*"]
+
+[tool.setuptools.package-data]
+photoreal = ["pipelines/vision/prompts/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,0 +1,15 @@
+# Additive ComfyUI model paths for photoreal_ai_app.
+# Pass to Comfy with:
+#   --extra-model-paths-config <repo-root>/comfyui_extra_model_paths.yaml
+# Do not edit runtime/comfyui internals for path wiring.
+
+photoreal_data:
+  base_path: data/
+  checkpoints: models/flux2/klein-base-9b/
+  unet: models/flux2/klein-base-9b/
+  diffusion_models: models/flux2/klein-base-9b/
+  vae: models/flux2/klein-base-9b/
+  text_encoders: models/flux2/klein-base-9b/text_encoder/
+  clip: models/flux2/klein-base-9b/text_encoder/
+  loras: models/loras/
+  embeddings: models/embeddings/

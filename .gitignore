@@ -17,16 +17,27 @@ build/
 .env
 .env.*
 !.env.example
+comfyui_extra_model_paths.local.yaml
 
 # Runtime data (keep directory markers)
 data/models/**
 !data/models/.gitkeep
+!data/models/photoreal_gen_manifest.json
 data/inputs/**
 !data/inputs/.gitkeep
 data/outputs/**
 !data/outputs/.gitkeep
 data/workspace/**
 !data/workspace/.gitkeep
+
+# ComfyUI local runtime junk (keep upstream source)
+runtime/comfyui/output/
+runtime/comfyui/temp/
+runtime/comfyui/input/
+runtime/comfyui/user/
+runtime/comfyui/models/
+runtime/comfyui/__pycache__/
+runtime/comfyui/.venv/
 
 # Model weights / large binaries
 *.safetensors
