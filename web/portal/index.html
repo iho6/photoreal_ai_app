@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Photoreal</title>
+    <link rel="stylesheet" href="/ui/tokens.css" />
+    <link rel="stylesheet" href="/ui/base.css" />
+    <link rel="stylesheet" href="/ui/components/button.css" />
+    <link rel="stylesheet" href="/ui/components/field.css" />
+    <style>
+      .portal {
+        max-width: 40rem;
+        margin: 0 auto;
+        padding: clamp(2.5rem, 8vh, 5rem) 1.5rem 3rem;
+      }
+      .portal-status {
+        margin-top: 1.25rem;
+        font-size: 0.9rem;
+        color: var(--pr-muted);
+      }
+      .portal-status strong {
+        color: var(--pr-ink);
+        font-weight: 500;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="portal" id="app"></main>
+    <script src="/ui/components/button.js"></script>
+    <script src="/ui/components/field.js"></script>
+    <script src="/ui/photoreal-ui.js"></script>
+    <script src="/portal/portal.js?v=pct-in-log"></script>
+  </body>
+</html>

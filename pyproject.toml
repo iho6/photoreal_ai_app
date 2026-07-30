@@ -12,7 +12,15 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
-# Glue only — install ComfyUI deps separately from runtime/comfyui/requirements.txt
+# Stage-1 launch portal only (no torch / Comfy)
+portal = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "python-dotenv>=1.0.0",
+    "httpx>=0.27.0",
+]
+# Glue only — ComfyUI runtime deps: requirements/comfyui-photoreal.txt
+# (not runtime/comfyui/requirements.txt)
 photoreal-gen = [
     "huggingface_hub>=0.26.0",
     "httpx>=0.27.0",

@@ -1,0 +1,14 @@
+:root {
+  --pr-bg: #ffffff;
+  --pr-bg-wash: #fafafa;
+  --pr-ink: #0a0a0a;
+  --pr-muted: #5c5c5c;
+  --pr-line: #0a0a0a;
+  --pr-line-width: 1px;
+  --pr-focus-offset: 3px;
+  --pr-font-display: "Syne", "Segoe UI", sans-serif;
+  --pr-font-body: "DM Sans", "Segoe UI", sans-serif;
+  --pr-ease: 180ms ease;
+  --pr-pad-x: 1rem;
+  --pr-pad-y: 0.75rem;
+}

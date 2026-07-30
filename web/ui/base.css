@@ -1,0 +1,153 @@
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;1,9..40,400&family=Syne:wght@600;700&display=swap");
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background:
+    radial-gradient(120% 80% at 50% -10%, #ffffff 0%, var(--pr-bg-wash) 55%, #f3f3f3 100%);
+  color: var(--pr-ink);
+  font-family: var(--pr-font-body);
+  font-size: 16px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+}
+
+.pr-brand {
+  font-family: var(--pr-font-display);
+  font-weight: 700;
+  font-size: clamp(2.75rem, 8vw, 4.5rem);
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  margin: 0;
+  animation: pr-brand-in 700ms ease both;
+}
+
+.pr-lede {
+  margin: 0.75rem 0 0;
+  max-width: 28rem;
+  color: var(--pr-muted);
+  font-size: 1.05rem;
+}
+
+@keyframes pr-brand-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.pr-progress {
+  height: 2px;
+  width: 100%;
+  background: transparent;
+  position: relative;
+  overflow: hidden;
+  margin: 1.25rem 0 0;
+}
+
+.pr-progress[data-active="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 40%;
+  background: var(--pr-ink);
+  animation: pr-progress-slide 1.1s ease-in-out infinite;
+}
+
+@keyframes pr-progress-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(350%);
+  }
+}
+
+.pr-log {
+  margin: 1rem 0 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 0.8rem;
+  color: var(--pr-muted);
+  max-height: 14rem;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.pr-download-bar {
+  margin: 0.75rem 0 0;
+  height: 10px;
+  width: 100%;
+  max-width: 28rem;
+  border: 1px solid var(--pr-line);
+  background: color-mix(in srgb, var(--pr-ink) 6%, transparent);
+  position: relative;
+  overflow: hidden;
+  display: none;
+}
+
+.pr-download-bar[data-visible="true"] {
+  display: block;
+}
+
+.pr-download-bar__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0%;
+  height: 100%;
+  background: var(--pr-ink);
+  transition: width 120ms linear;
+}
+
+.pr-download-bar[data-indeterminate="true"] .pr-download-bar__fill {
+  width: 36% !important;
+  animation: pr-download-slide 1.15s ease-in-out infinite;
+}
+
+@keyframes pr-download-slide {
+  from {
+    transform: translateX(-120%);
+  }
+  to {
+    transform: translateX(320%);
+  }
+}
+
+.pr-download-meta {
+  margin: 0.4rem 0 0;
+  font-size: 0.8rem;
+  color: var(--pr-muted);
+  display: none;
+  max-width: 28rem;
+}
+
+.pr-download-meta[data-visible="true"] {
+  display: block;
+}
+
+.pr-download-meta strong {
+  color: var(--pr-ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}

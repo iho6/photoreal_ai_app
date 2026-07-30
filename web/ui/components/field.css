@@ -1,0 +1,51 @@
+.pr-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0 0 1rem;
+  max-width: 28rem;
+}
+
+.pr-field label {
+  font-family: var(--pr-font-body);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--pr-ink);
+}
+
+.pr-field input,
+.pr-field textarea {
+  appearance: none;
+  width: 100%;
+  margin: 0;
+  padding: var(--pr-pad-y) var(--pr-pad-x);
+  border: var(--pr-line-width) solid var(--pr-line);
+  background: var(--pr-bg);
+  color: var(--pr-ink);
+  font-family: var(--pr-font-body);
+  font-size: 1rem;
+  border-radius: 0;
+  outline: var(--pr-line-width) solid transparent;
+  outline-offset: 0;
+  transition:
+    outline-color var(--pr-ease),
+    outline-offset var(--pr-ease);
+}
+
+.pr-field input:hover,
+.pr-field textarea:hover,
+.pr-field input:focus,
+.pr-field textarea:focus {
+  outline-color: var(--pr-line);
+  outline-offset: var(--pr-focus-offset);
+}
+
+.pr-field input:focus,
+.pr-field textarea:focus {
+  outline-color: var(--pr-line);
+}
+
+.pr-field .pr-hint {
+  font-size: 0.75rem;
+  color: var(--pr-muted);
+}

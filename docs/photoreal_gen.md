@@ -15,7 +15,7 @@ Single image ability: **FLUX.2 Klein 9B Base** + **Lenovo UltraReal** + **Mrpopo
 python -m venv .venv
 # Windows: .venv\Scripts\activate
 pip install -e ".[photoreal-gen]"
-pip install -r runtime/comfyui/requirements.txt
+pip install -r requirements/comfyui-photoreal.txt
 # Install PyTorch per ComfyUI / your CUDA docs if not already satisfied
 
 # gated HF downloads + public Civitai LoRAs

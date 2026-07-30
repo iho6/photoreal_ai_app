@@ -1,0 +1,57 @@
+{
+  "ability": "photoreal_gen",
+  "backbone": "flux.2-klein-base-9b",
+  "updated_at": "2026-07-30T22:11:55.725120+00:00",
+  "assets": [
+    {
+      "role": "flux2_ae",
+      "repo": "black-forest-labs/FLUX.2-dev",
+      "file": "ae.safetensors",
+      "path": "data\\models\\flux2\\klein-base-9b\\ae.safetensors",
+      "bytes": 336211292,
+      "license": "FLUX / check ae card \u2014 do not download flux2-dev.safetensors"
+    },
+    {
+      "role": "klein_base_9b_transformer",
+      "repo": "black-forest-labs/FLUX.2-klein-base-9B",
+      "file": "flux-2-klein-base-9b.safetensors",
+      "path": "data\\models\\flux2\\klein-base-9b\\flux-2-klein-base-9b.safetensors",
+      "bytes": 18157185168,
+      "license": "FLUX Non-Commercial"
+    },
+    {
+      "role": "qwen3_text_encoder_and_tokenizer",
+      "repo": "black-forest-labs/FLUX.2-klein-base-9B",
+      "path": "data\\models\\flux2\\klein-base-9b",
+      "license": "bundled with Klein base (gated)",
+      "copied_files": 0,
+      "skipped_files": 14
+    },
+    {
+      "path": "data\\models\\loras\\lenovo_flux_klein9b.safetensors",
+      "skipped": true,
+      "bytes": 168858352,
+      "expected_bytes": null,
+      "version_id": 2682771,
+      "filename": "lenovo_flux_klein9b.safetensors",
+      "url": "https://civitai.com/api/download/models/2682771",
+      "role": "lenovo_ultrareal"
+    },
+    {
+      "path": "data\\models\\loras\\mrpopo_photorealistic.safetensors",
+      "skipped": true,
+      "bytes": 331391960,
+      "expected_bytes": null,
+      "version_id": 2972219,
+      "filename": "mrpopo_photorealistic.safetensors",
+      "url": "https://civitai.com/api/download/models/2972219",
+      "role": "mrpopo_photoreal"
+    }
+  ],
+  "notes": [
+    "Klein 9B Base is FLUX Non-Commercial (gated on Hugging Face).",
+    "Do not download full FLUX.2 [dev] transformer.",
+    "Default SFW LoRAs: Lenovo UltraReal + Mrpopo photoreal.",
+    "Create data/models/flux2/klein-base-9b/text_encoder/qwen_3_8b.safetensors for Comfy CLIPLoader (type=flux2)."
+  ]
+}
