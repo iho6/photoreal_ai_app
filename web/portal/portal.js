@@ -4,52 +4,33 @@
   const UI = window.PhotorealUI;
   const app = document.getElementById("app");
 
-  const brand = document.createElement("h1");
-  brand.className = "pr-brand";
-  brand.textContent = "Photoreal";
-
-  const lede = document.createElement("p");
-  lede.className = "pr-lede";
-  lede.textContent =
-    "Enter Hugging Face and Git details, then Launch to install weights and start API + Comfy.";
-
   const form = document.createElement("div");
-  form.style.marginTop = "2.5rem";
 
   const hf = UI.createField({
     label: "Hugging Face token",
+    hideLabel: true,
     name: "hf_token",
     password: true,
-    placeholder: "hf_…",
-    hint: "Required for gated FLUX.2 Klein. Accept the NC license on Hugging Face first.",
+    placeholder: "Hugging Face token",
     required: true,
-  });
-  const civitai = UI.createField({
-    label: "Civitai API token",
-    name: "civitai_api_token",
-    password: true,
-    placeholder: "Optional",
-    hint: "Helps with Civitai rate limits when downloading LoRAs.",
   });
   const github = UI.createField({
     label: "GitHub token",
+    hideLabel: true,
     name: "github_token",
     password: true,
-    placeholder: "Optional",
+    placeholder: "GitHub token",
   });
-  const gitName = UI.createField({
-    label: "Git user.name",
-    name: "git_user_name",
-    placeholder: "local repo only",
-  });
-  const gitEmail = UI.createField({
-    label: "Git user.email",
-    name: "git_user_email",
-    type: "email",
-    placeholder: "local repo only",
+  const runpod = UI.createField({
+    label: "Runpod API key",
+    hideLabel: true,
+    name: "runpod_api_key",
+    password: true,
+    placeholder: "Runpod API key",
+    required: true,
   });
 
-  [hf, civitai, github, gitName, gitEmail].forEach(function (f) {
+  [hf, github, runpod].forEach(function (f) {
     form.appendChild(f.root);
   });
 
@@ -86,16 +67,66 @@
   function collectCredentials() {
     return {
       hf_token: hf.input.value,
-      civitai_api_token: civitai.input.value,
       github_token: github.input.value,
-      git_user_name: gitName.input.value,
-      git_user_email: gitEmail.input.value,
+      runpod_api_key: runpod.input.value,
     };
   }
 
   function setStatus(html) {
     statusEl.innerHTML = html;
   }
+
+  let saveTimer = null;
+  let saving = false;
+
+  async function autoSaveCredentials() {
+    if (saving) return;
+    const body = collectCredentials();
+    // Nothing new typed (placeholders only / empty) — skip.
+    const hfVal = (body.hf_token || "").trim();
+    const ghVal = (body.github_token || "").trim();
+    const rpVal = (body.runpod_api_key || "").trim();
+    if (!hfVal && !ghVal && !rpVal) return;
+    if (
+      /^•+$/.test(hfVal) &&
+      (!ghVal || /^•+$/.test(ghVal)) &&
+      (!rpVal || /^•+$/.test(rpVal))
+    )
+      return;
+
+    saving = true;
+    try {
+      const r = await fetch("/api/credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json().catch(function () {
+        return {};
+      });
+      if (!r.ok) throw new Error(data.detail || "Save failed");
+      await refreshStatus();
+    } catch (e) {
+      setStatus("<strong>Error:</strong> " + (e.message || e));
+    } finally {
+      saving = false;
+    }
+  }
+
+  function scheduleAutoSave() {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(function () {
+      autoSaveCredentials();
+    }, 600);
+  }
+
+  [hf, github, runpod].forEach(function (f) {
+    f.input.addEventListener("input", function () {
+      f.input.dataset.dirty = "1";
+    });
+    f.input.addEventListener("change", scheduleAutoSave);
+    f.input.addEventListener("blur", scheduleAutoSave);
+  });
 
   async function refreshStatus() {
     const r = await fetch("/api/status");
@@ -104,6 +135,7 @@
     const apiOk = h.api && h.api.ok;
     const comfyOk = h.comfy && h.comfy.ok;
     const c = data.credentials || {};
+    const cuda = h.torch_cuda === true;
     setStatus(
       "API <strong>" +
         (apiOk ? "up" : "down") +
@@ -111,35 +143,24 @@
         (comfyOk ? "up" : "down") +
         "</strong> · HF token <strong>" +
         (c.hf_token_set ? "saved" : "missing") +
-        "</strong>"
+        "</strong> · Runpod <strong>" +
+        (c.runpod_token_set ? "saved" : "missing") +
+        "</strong> · Flash <strong>" +
+        (c.flash_character_endpoint ? "cached" : "auto") +
+        "</strong>" +
+        (cuda ? "" : " · <strong>CPU</strong> torch")
     );
-    if (c.git_user_name) gitName.input.placeholder = c.git_user_name;
-    if (c.git_user_email) gitEmail.input.placeholder = c.git_user_email;
+    if (c.hf_token_set && c.hf_token && !hf.input.dataset.dirty) {
+      hf.input.value = c.hf_token;
+    }
+    if (c.github_token_set && c.github_token && !github.input.dataset.dirty) {
+      github.input.value = c.github_token;
+    }
+    if (c.runpod_token_set && c.runpod_api_key && !runpod.input.dataset.dirty) {
+      runpod.input.value = c.runpod_api_key;
+    }
     return data;
   }
-
-  const saveBtn = UI.createButton({
-    label: "Save",
-    onClick: async function () {
-      UI.setButtonBusy(saveBtn, true, "Saving…");
-      try {
-        const r = await fetch("/api/credentials", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(collectCredentials()),
-        });
-        const body = await r.json().catch(function () {
-          return {};
-        });
-        if (!r.ok) throw new Error(body.detail || "Save failed");
-        await refreshStatus();
-      } catch (e) {
-        setStatus("<strong>Error:</strong> " + (e.message || e));
-      } finally {
-        UI.setButtonBusy(saveBtn, false);
-      }
-    },
-  });
 
   function setDownloadProgress(pct, label) {
     const hasPct = pct != null && !isNaN(pct);
@@ -207,14 +228,14 @@
     if (text.endsWith("\n")) text = text.slice(0, -1);
     const lines = text.split("\n");
     const isProg = function (s) {
-      return /^\s*\[[#\-]+\]\s+\d/.test(s) || s.indexOf("@@PROGRESS@@") === 0;
+      return /^\s*\[[#\-]+\]\s+\d/.test(s) || String(s).indexOf("@@PROGRESS@@") === 0;
     };
-    if (lines.length && isProg(lines[lines.length - 1])) {
-      lines[lines.length - 1] = line;
-    } else {
-      lines.push(line);
-    }
-    logEl.textContent = lines.join("\n") + "\n";
+    // Keep exactly one progress line (drop any older ones).
+    const kept = lines.filter(function (s) {
+      return !isProg(s);
+    });
+    kept.push(line);
+    logEl.textContent = kept.join("\n") + "\n";
     if (stick) logEl.scrollTop = logEl.scrollHeight;
   }
 
@@ -241,6 +262,15 @@
     }
   }
 
+  function stopLoadingUI(failedMessage) {
+    progress.dataset.active = "false";
+    setDownloadProgress(null, null);
+    UI.setButtonBusy(launchBtn, false);
+    if (failedMessage) {
+      setStatus("<strong>Launch failed:</strong> " + failedMessage);
+    }
+  }
+
   function watchLogs() {
     stopWatching();
     watching = true;
@@ -257,30 +287,52 @@
         try {
           const msg = JSON.parse(ev.data);
           if (msg.reset) {
+            // Only a real new Launch should wipe the log — not SSE reconnect.
             logEl.textContent = "";
             logCursor = 0;
+            progress.dataset.active = "true";
             setDownloadProgress(0, formatLocalBar(0, "starting…"));
             return;
           }
           if (Object.prototype.hasOwnProperty.call(msg, "progress") && !msg.done) {
-            setDownloadProgress(msg.progress, msg.label || null);
+            if (msg.progress == null && !(msg.label && String(msg.label).trim())) {
+              setDownloadProgress(null, null);
+            } else {
+              setDownloadProgress(msg.progress, msg.label || null);
+            }
             return;
           }
           if (msg.line != null && msg.line !== undefined && !msg.done) {
             appendLog(msg.line);
             if (typeof msg.i === "number") logCursor = msg.i;
-          }
-          if (msg.done) {
-            progress.dataset.active = "false";
-            setDownloadProgress(null, null);
-            stopWatching();
-            UI.setButtonBusy(launchBtn, false);
-            refreshStatus();
-            if (!msg.ok) {
-              setStatus(
-                "<strong>Launch failed:</strong> " + (msg.error || "see log")
+            const line = String(msg.line);
+            if (
+              line.indexOf("Starting services") >= 0 ||
+              line.indexOf("skip local model") >= 0 ||
+              line.indexOf("skip (already") >= 0 ||
+              line.indexOf("=== Launch complete") >= 0
+            ) {
+              setDownloadProgress(null, null);
+            }
+            if (
+              line.indexOf("Traceback (most recent call last)") === 0 ||
+              line.indexOf("ERROR:") === 0
+            ) {
+              stopLoadingUI(
+                line.indexOf("ERROR:") === 0
+                  ? line.replace(/^ERROR:\s*/, "")
+                  : "see log"
               );
             }
+          }
+            if (msg.done) {
+            stopWatching();
+            stopLoadingUI(msg.ok ? null : msg.error || "see log");
+            if (msg.ok) {
+              window.location.href = "/timeline";
+              return;
+            }
+            refreshStatus();
           }
         } catch (_) {
           /* ignore malformed */
@@ -288,7 +340,7 @@
       };
 
       es.onerror = function () {
-        // Browser would auto-replay the whole stream — close and resume from cursor.
+        // Resume from cursor — do not treat as a fresh Launch.
         try {
           es.close();
         } catch (_) {}
@@ -329,6 +381,21 @@
       setDownloadProgress(null, null);
       setStatus("Starting Launch…");
       try {
+        const creds = collectCredentials();
+        const hfOk = (creds.hf_token || "").trim() && !/^•+$/.test(creds.hf_token.trim());
+        const rpOk =
+          (creds.runpod_api_key || "").trim() &&
+          !/^•+$/.test(creds.runpod_api_key.trim());
+        // Prefer already-saved values from status if fields look empty/bullets.
+        const st = await refreshStatus();
+        const c = (st && st.credentials) || {};
+        if (!hfOk && !c.hf_token_set) {
+          throw new Error("Hugging Face token is required");
+        }
+        if (!rpOk && !c.runpod_token_set) {
+          throw new Error("Runpod API key is required");
+        }
+        await autoSaveCredentials();
         const r = await fetch("/api/launch", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -360,11 +427,16 @@
     },
   });
 
-  row.appendChild(saveBtn);
-  row.appendChild(launchBtn);
+  const skipBtn = UI.createButton({
+    label: "Skip",
+    onClick: function () {
+      window.location.href = "/timeline";
+    },
+  });
 
-  app.appendChild(brand);
-  app.appendChild(lede);
+  row.appendChild(launchBtn);
+  row.appendChild(skipBtn);
+
   app.appendChild(form);
   app.appendChild(row);
   app.appendChild(statusEl);

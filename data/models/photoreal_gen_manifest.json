@@ -1,7 +1,7 @@
 {
   "ability": "photoreal_gen",
   "backbone": "flux.2-klein-base-9b",
-  "updated_at": "2026-07-30T22:11:55.725120+00:00",
+  "updated_at": "2026-07-31T22:00:07.049940+00:00",
   "assets": [
     {
       "role": "flux2_ae",

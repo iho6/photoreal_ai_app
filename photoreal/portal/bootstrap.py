@@ -11,10 +11,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from photoreal.portal.credentials import apply_env_to_process
+from photoreal.portal.credentials import assert_launch_credentials, apply_env_to_process
 from photoreal.portal.install_probe import (
     comfy_install_satisfied,
     extras_deps_satisfied,
+    models_install_satisfied,
     write_comfy_stamp,
 )
 from photoreal.portal.logstream import (
@@ -149,6 +150,7 @@ def _run_logged(
     STATE._proc = proc
     assert proc.stdout is not None
     buf = ""
+    saw_traceback = False
     try:
         while True:
             if cancel.is_set() or generation != STATE.generation:
@@ -166,11 +168,31 @@ def _run_logged(
             buf, events = feed_cr_lf(buf, text)
             for line, mode in events:
                 emit(line, mode)
+                # HF / xet can print a Traceback from a worker thread and keep running.
+                if (not saw_traceback) and (
+                    line.startswith("Traceback (most recent call last)")
+                    or line.startswith("ERROR:")
+                ):
+                    saw_traceback = True
+                    emit("stopping download after error…", "append")
+                    STATE.clear_progress()
+                    try:
+                        proc.terminate()
+                    except OSError:
+                        pass
         for line, mode in flush_cr_lf(buf):
             emit(line, mode)
         STATE.clear_progress()
-        return proc.wait()
+        code = proc.wait()
+        if saw_traceback and code == 0:
+            return 1
+        return code
     finally:
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
         if STATE._proc is proc:
             STATE._proc = None
 
@@ -216,9 +238,7 @@ def run_stage2(
     generation = STATE.generation if generation is None else generation
     log = emit or _gated_emit(generation)
     cancel = cancel or STATE.cancel
-    tokens = apply_env_to_process()
-    if not tokens.get("HF_TOKEN"):
-        raise ValueError("HF_TOKEN missing — Save credentials before Launch")
+    tokens = assert_launch_credentials()
 
     py = str(venv_python())
     env = os.environ.copy()
@@ -266,6 +286,25 @@ def run_stage2(
         log("wrote comfy requirements stamp", "append")
 
     def download_models() -> None:
+        # Runpod key ⇒ Flash generate; do not pull multi-GB local weights on Launch.
+        try:
+            from photoreal.portal.credentials import load_credentials
+
+            apply_env_to_process()
+            if load_credentials().get("runpod_token_set"):
+                log(
+                    "skip local model download (Runpod Flash configured — "
+                    "weights live on the Network Volume)",
+                    "append",
+                )
+                return
+        except Exception as exc:  # noqa: BLE001
+            log(f"flash download-skip probe failed ({exc}); checking local weights", "append")
+
+        if models_install_satisfied():
+            log("skip (already present): core photoreal_gen model weights", "append")
+            return
+
         code = _run_logged(
             [py, str(DOWNLOAD_SCRIPT), "--all"],
             cwd=REPO_ROOT,
@@ -283,9 +322,11 @@ def run_stage2(
 
     _check_cancel(cancel, generation)
     log("=== Starting services (API + Comfy) ===", "append")
-    result = start_all(ensure_comfy=True)
-    for n in result.get("notes") or []:
-        log(str(n), "append")
+    result = start_all(
+        ensure_comfy=True,
+        emit=lambda msg: log(str(msg), "append"),
+    )
+    # Notes already streamed via emit; keep a compact health trailer.
     if result.get("attach"):
         log(f"Attach: {result['attach']}", "append")
     if result.get("logs"):

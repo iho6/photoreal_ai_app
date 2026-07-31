@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from photoreal.config import get_settings
+
+# Keep log handles open for the life of the child (Windows inheritance).
+_OPEN_LOGS: list[TextIO] = []
+
+# Avoid console windows; do NOT use DETACHED_PROCESS — it stalls Comfy stdio/boot.
+CREATE_NO_WINDOW = 0x08000000
 
 
 def _pid_file(logs_dir: Path, name: str) -> Path:
@@ -16,7 +24,6 @@ def _pid_file(logs_dir: Path, name: str) -> Path:
 
 def _is_pid_running(pid: int) -> bool:
     try:
-        # Windows: OpenProcess via tasklist is heavy; use ctypes-free approach
         r = subprocess.run(
             ["tasklist", "/FI", f"PID eq {pid}"],
             capture_output=True,
@@ -61,16 +68,19 @@ def _start_detached(
     log_path: Path,
 ) -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    # CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
-    creationflags = 0x00000200 | 0x00000008
-    with open(log_path, "a", encoding="utf-8") as logf:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(cwd),
-            stdout=logf,
-            stderr=subprocess.STDOUT,
-            creationflags=creationflags,
-        )
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    logf = open(log_path, "a", encoding="utf-8")  # noqa: SIM115 — kept for child
+    logf.write(f"\n--- start {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+    logf.flush()
+    _OPEN_LOGS.append(logf)
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(cwd),
+        stdout=logf,
+        stderr=subprocess.STDOUT,
+        creationflags=CREATE_NO_WINDOW,
+        env=env,
+    )
     return int(proc.pid)
 
 
@@ -105,7 +115,6 @@ def start_windows(
     if comfy_cmd is not None:
         if not comfy_cwd.is_dir():
             raise RuntimeError(f"ComfyUI not found at {comfy_cwd}")
-        # stop_comfy() already ran in start_all; just start fresh
         pid = _start_detached(
             comfy_cmd,
             cwd=comfy_cwd,

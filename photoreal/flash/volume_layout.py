@@ -1,0 +1,94 @@
+"""Network Volume layout + completeness checks for Flash character workers."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+VOLUME_NAME = "photoreal-models"
+VOLUME_DATACENTER = "US-GA-2"
+VOLUME_SIZE_GB = 200
+READY_MARKER = ".photoreal_volume_ready"
+
+
+def volume_root_candidates() -> tuple[Path, ...]:
+    """Pod mount is usually /workspace; serverless is /runpod-volume."""
+    return (Path("/workspace"), Path("/runpod-volume"))
+
+
+def resolve_volume_root(explicit: Path | str | None = None) -> Path:
+    if explicit is not None:
+        return Path(explicit)
+    for cand in volume_root_candidates():
+        if cand.is_dir():
+            return cand
+    return Path("/workspace")
+
+
+def volume_missing_parts(root: Path | str) -> list[str]:
+    """
+    Return human-readable reasons the volume is incomplete for character Generate.
+
+    Empty list means models + Comfy layout look complete (size thresholds).
+    """
+    root = Path(root)
+    missing: list[str] = []
+    models = root / "data" / "models"
+    klein = models / "flux2" / "klein-base-9b"
+    loras = models / "loras"
+    vlm = models / "vlm" / "Qwen3-VL-8B-Instruct"
+    comfy = root / "runtime" / "comfyui" / "main.py"
+    yaml = root / "comfyui_extra_model_paths.yaml"
+
+    required_files = (
+        (klein / "ae.safetensors", 100_000_000),
+        (klein / "flux-2-klein-base-9b.safetensors", 1_000_000_000),
+        (loras / "lenovo_flux_klein9b.safetensors", 1_000_000),
+        (loras / "mrpopo_photorealistic.safetensors", 1_000_000),
+    )
+    for path, min_bytes in required_files:
+        try:
+            if not path.is_file() or path.stat().st_size < min_bytes:
+                missing.append(f"missing/small: {path.relative_to(root)}")
+        except OSError:
+            missing.append(f"unreadable: {path.relative_to(root)}")
+
+    te = klein / "text_encoder"
+    tok = klein / "tokenizer"
+    if not te.is_dir():
+        missing.append("missing: data/models/flux2/klein-base-9b/text_encoder/")
+    else:
+        try:
+            if sum(1 for p in te.rglob("*") if p.is_file()) < 3:
+                missing.append("incomplete: text_encoder/")
+        except OSError:
+            missing.append("unreadable: text_encoder/")
+    if not tok.is_dir():
+        missing.append("missing: data/models/flux2/klein-base-9b/tokenizer/")
+    else:
+        try:
+            if sum(1 for p in tok.rglob("*") if p.is_file()) < 3:
+                missing.append("incomplete: tokenizer/")
+        except OSError:
+            missing.append("unreadable: tokenizer/")
+
+    if not vlm.is_dir():
+        missing.append("missing: data/models/vlm/Qwen3-VL-8B-Instruct/")
+    else:
+        cfg = vlm / "config.json"
+        try:
+            files = sum(1 for p in vlm.rglob("*") if p.is_file())
+        except OSError:
+            files = 0
+        if not cfg.is_file() or files < 5:
+            missing.append("incomplete: VLM Qwen3-VL-8B-Instruct/")
+
+    if not comfy.is_file():
+        missing.append("missing: runtime/comfyui/main.py")
+    if not yaml.is_file():
+        missing.append("missing: comfyui_extra_model_paths.yaml")
+
+    return missing
+
+
+def volume_models_complete(root: Path | str) -> bool:
+    return not volume_missing_parts(root)

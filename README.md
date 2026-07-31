@@ -16,7 +16,7 @@ chmod +x launch.sh scripts/launch.sh
 launch.bat
 ```
 
-Portal: `http://127.0.0.1:8010/` — HF token + Git → **Save** → **Launch**.
+Portal: `http://127.0.0.1:8010/` — HF token + Runpod API key → **Launch**.
 
 ## `photoreal_gen`
 

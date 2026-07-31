@@ -67,21 +67,75 @@ def test_credentials_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     out = creds.save_credentials(
         hf_token="hf_test_token",
         civitai_api_token="civ_test",
+        runpod_api_key="rp_test_key",
+        flash_character_endpoint="ep_test123",
+        generate_backend="auto",
         git_user_name="Test User",
         git_user_email="test@example.com",
     )
     assert out["hf_token_set"] is True
+    assert out["runpod_token_set"] is True
+    assert out["runpod_api_key"] == "rp_test_key"
+    assert out["flash_character_endpoint"] == "ep_test123"
     assert env_path.is_file()
-    assert "hf_test_token" in env_path.read_text(encoding="utf-8")
+    text = env_path.read_text(encoding="utf-8")
+    assert "hf_test_token" in text
+    assert "RUNPOD_API_KEY=rp_test_key" in text
+    assert "FLASH_CHARACTER_ENDPOINT=ep_test123" in text
 
-    # Masked reload should not echo raw token to API consumers
+    # Prefill returns the real local token (length + reveal)
     loaded = creds.load_credentials()
     assert loaded["hf_token_set"] is True
-    assert loaded["hf_token"] == "••••••••"
+    assert loaded["hf_token"] == "hf_test_token"
 
     # Bullet placeholder must not wipe existing token
     creds.save_credentials(hf_token="••••••••")
     assert "hf_test_token" in env_path.read_text(encoding="utf-8")
+
+
+def test_credentials_require_runpod_for_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import photoreal.portal.credentials as creds
+
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(creds, "ENV_PATH", env_path)
+    monkeypatch.setattr(creds, "_git_config_get", lambda key: None)
+    monkeypatch.setattr(creds, "_git_config_set", lambda key, value: None)
+
+    creds.save_credentials(hf_token="hf_only")
+    with pytest.raises(ValueError, match="RUNPOD_API_KEY"):
+        creds.assert_launch_credentials()
+
+    creds.save_credentials(runpod_api_key="rp_key")
+    tokens = creds.assert_launch_credentials()
+    assert tokens["RUNPOD_API_KEY"] == "rp_key"
+
+
+def test_models_install_satisfied_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import photoreal.portal.install_probe as probe
+    import photoreal.portal.paths as paths
+
+    monkeypatch.setattr(probe, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(paths, "REPO_ROOT", tmp_path)
+    assert probe.models_install_satisfied() is False
+
+    klein = tmp_path / "data" / "models" / "flux2" / "klein-base-9b"
+    loras = tmp_path / "data" / "models" / "loras"
+    klein.mkdir(parents=True)
+    loras.mkdir(parents=True)
+    (klein / "ae.safetensors").write_bytes(b"x" * 100_000_001)
+    (klein / "flux-2-klein-base-9b.safetensors").write_bytes(b"x" * 1_000_000_001)
+    (loras / "lenovo_flux_klein9b.safetensors").write_bytes(b"x" * 1_000_001)
+    (loras / "mrpopo_photorealistic.safetensors").write_bytes(b"x" * 1_000_001)
+    te = klein / "text_encoder"
+    tok = klein / "tokenizer"
+    te.mkdir()
+    tok.mkdir()
+    for i in range(3):
+        (te / f"f{i}.json").write_text("{}", encoding="utf-8")
+        (tok / f"t{i}.json").write_text("{}", encoding="utf-8")
+    assert probe.models_install_satisfied() is True
 
 
 def test_supervisor_dry_run_commands() -> None:
@@ -116,3 +170,22 @@ def test_portal_app_status_and_health() -> None:
     home = client.get("/")
     assert home.status_code == 200
     assert b"Photoreal" in home.content
+
+    timeline = client.get("/timeline")
+    assert timeline.status_code == 200
+    assert b"timeline" in timeline.content.lower()
+
+    character = client.get("/character")
+    assert character.status_code == 200
+    assert b"character" in character.content.lower()
+
+    bad = client.post("/api/character/generate", json={"prompt": ""})
+    assert bad.status_code == 422
+
+    gal = client.get("/api/character/gallery")
+    assert gal.status_code == 200
+    assert "items" in gal.json()
+    assert isinstance(gal.json()["items"], list)
+
+    missing = client.get("/api/character/jobs/does-not-exist")
+    assert missing.status_code == 404

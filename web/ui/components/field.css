@@ -13,6 +13,12 @@
   color: var(--pr-ink);
 }
 
+.pr-field__control {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+}
+
 .pr-field input,
 .pr-field textarea {
   appearance: none;
@@ -30,6 +36,43 @@
   transition:
     outline-color var(--pr-ease),
     outline-offset var(--pr-ease);
+}
+
+.pr-field__control input {
+  flex: 1;
+  min-width: 0;
+  border-right: none;
+}
+
+.pr-field__reveal {
+  appearance: none;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0 0.75rem;
+  border: var(--pr-line-width) solid var(--pr-line);
+  background: var(--pr-bg);
+  color: var(--pr-muted);
+  cursor: pointer;
+  outline: var(--pr-line-width) solid transparent;
+  outline-offset: 0;
+  transition:
+    color var(--pr-ease),
+    outline-color var(--pr-ease),
+    outline-offset var(--pr-ease);
+}
+
+.pr-field__reveal:hover,
+.pr-field__reveal:focus-visible {
+  color: var(--pr-ink);
+  outline-color: var(--pr-line);
+  outline-offset: var(--pr-focus-offset);
+}
+
+.pr-field__reveal[aria-pressed="true"] {
+  color: var(--pr-ink);
 }
 
 .pr-field input:hover,

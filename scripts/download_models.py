@@ -50,114 +50,102 @@ HF_TOKENIZER_PREFIX = "tokenizer"
 
 def portal_tqdm_class() -> Any:
     """
-    Duck-typed tqdm for huggingface_hub that emits parseable progress lines.
-
-    Uses newline markers (not bare \\r) so progress survives Windows pipes.
+    Subclass of huggingface_hub tqdm that keeps HF internals (format_dict, etc.)
+    but emits ``@@PROGRESS@@|<pct>|<label>`` lines for the portal.
     """
+    from huggingface_hub.utils.tqdm import tqdm as HfTqdm
 
-    class PortalTqdm:
-        def __init__(
-            self,
-            iterable: Any = None,
-            *args: Any,
-            total: Any = None,
-            desc: Any = None,
-            initial: int = 0,
-            disable: bool = False,
-            **kwargs: Any,
-        ) -> None:
-            self.iterable = iterable
-            self.total = total
-            self.n = int(initial or 0)
-            self.desc = (desc or kwargs.get("desc") or "") or ""
-            self.disable = bool(disable)
-            self.leave = bool(kwargs.get("leave", False))
-            self.pos = int(kwargs.get("pos") or 0)
-            self._last_emit = 0.0
-            self._last_pct = -1.0
-            if self.iterable is not None and self.total is None:
-                try:
-                    self.total = len(self.iterable)
-                except TypeError:
-                    self.total = None
+    class PortalTqdm(HfTqdm):
+        _portal_last_emit = 0.0
+        _portal_last_key = ""
 
-        def __iter__(self):
-            if self.iterable is None:
-                return iter(())
-            for obj in self.iterable:
-                yield obj
-                self.update(1)
-            self.close()
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            # Avoid rendering the real ANSI bar into the piped log.
+            kwargs.setdefault("leave", False)
+            kwargs.setdefault("dynamic_ncols", False)
+            super().__init__(*args, **kwargs)
+            self._portal_last_pct = -1.0
 
-        def __enter__(self) -> "PortalTqdm":
-            self._emit(force=True)
-            return self
+        def display(self, msg: Any = None, pos: Any = None, **kwargs: Any) -> Any:
+            # Skip default status_printer output; we emit a portal marker instead.
+            self._portal_emit()
+            return True
 
-        def __exit__(self, *args: Any) -> None:
-            self.close()
+        def update(self, n: float | int = 1) -> Any:
+            result = super().update(n)
+            self._portal_emit()
+            return result
 
-        def update(self, n: float | int = 1) -> None:
-            if self.disable:
-                return
-            self.n += int(n)
-            self._emit()
+        def refresh(self, nolock: bool = False, lock_args: Any = None) -> Any:
+            result = super().refresh(nolock=nolock, lock_args=lock_args)
+            self._portal_emit()
+            return result
 
-        def reset(self, total: Any = None) -> None:
-            self.n = 0
-            if total is not None:
-                self.total = total
-            self._emit(force=True)
-
-        def set_description(self, desc: Any = None, refresh: bool = True) -> None:
-            if desc is not None:
-                self.desc = str(desc)
+        def set_postfix_str(self, s: str = "", refresh: bool = True) -> None:
+            super().set_postfix_str(s, refresh=False)
             if refresh:
-                self._emit(force=True)
-
-        def set_description_str(self, desc: Any = None, refresh: bool = True) -> None:
-            self.set_description(desc, refresh=refresh)
-
-        def set_postfix(self, *args: Any, **kwargs: Any) -> None:
-            return None
-
-        def set_postfix_str(self, *args: Any, **kwargs: Any) -> None:
-            return None
-
-        def refresh(self) -> None:
-            self._emit(force=True)
-
-        def clear(self) -> None:
-            return None
+                self._portal_emit()
 
         def close(self) -> None:
-            if not self.disable:
-                self._emit(force=True)
+            try:
+                self._portal_emit(force=True)
+            finally:
+                # Prevent parent close from printing a leftover bar line.
+                try:
+                    self.disable = True
+                except Exception:  # noqa: BLE001
+                    pass
+                super().close()
 
-        def display(self, *args: Any, **kwargs: Any) -> None:
-            self._emit(force=True)
-
-        def _emit(self, force: bool = False) -> None:
-            if self.disable:
+        def _portal_emit(self, force: bool = False) -> None:
+            if getattr(self, "disable", False):
                 return
-            now = time.monotonic()
-            if self.total and float(self.total) > 0:
-                pct = 100.0 * min(float(self.n), float(self.total)) / float(self.total)
+            total = getattr(self, "total", None) or 0
+            n = int(getattr(self, "n", 0) or 0)
+            desc = str(getattr(self, "desc", None) or "download").strip() or "download"
+
+            # Snapshot creates two bars; prefer the byte-download bar for %.
+            # Still allow reconstruction bar if it's the only one moving.
+            low = desc.lower()
+            if "reconstruct" in low and total and n <= 0 and not force:
+                return
+
+            if total and float(total) > 0:
+                pct = 100.0 * min(float(n), float(total)) / float(total)
             else:
-                # Unknown total — still heartbeat so UI is not stuck on spinner.
                 pct = 0.0
+
+            now = time.monotonic()
+            key = f"{desc}|{int(pct * 10)}|{n}"
             if (
                 not force
-                and now - self._last_emit < 0.25
-                and abs(pct - self._last_pct) < 0.5
+                and key == PortalTqdm._portal_last_key
+                and now - PortalTqdm._portal_last_emit < 0.25
             ):
                 return
-            self._last_emit = now
-            self._last_pct = pct
-            desc = str(self.desc or "download").strip() or "download"
-            if self.total and float(self.total) > 0:
-                desc = f"{desc} ({self.n}/{self.total})"
-            # Newline marker: reliable through redirected pipes on Windows.
-            print(f"@@PROGRESS@@|{pct:.1f}|{desc}", flush=True)
+            if (
+                not force
+                and now - PortalTqdm._portal_last_emit < 0.2
+                and abs(pct - self._portal_last_pct) < 0.05
+                and "download" not in low
+            ):
+                return
+
+            PortalTqdm._portal_last_emit = now
+            PortalTqdm._portal_last_key = key
+            self._portal_last_pct = pct
+
+            if total and float(total) > 0:
+                if float(total) >= 1_000_000:
+                    label = f"{desc} ({n}/{int(total)})"
+                else:
+                    label = f"{desc} ({n}/{int(total)})"
+            else:
+                label = f"{desc} ({n})"
+
+            # More precision while still near 0% on multi-GB files.
+            pct_s = f"{pct:.2f}" if pct < 1.0 else f"{pct:.1f}"
+            print(f"@@PROGRESS@@|{pct_s}|{label}", flush=True)
 
     return PortalTqdm
 
@@ -315,8 +303,19 @@ def _promote_incomplete_to_partial(dest: Path, tmp: Path) -> int:
 
 def download_civitai(entry: dict, dest: Path, *, _retried: bool = False) -> dict:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    expected = civitai_expected_bytes(entry)
     local = _file_size(dest)
+    # Fast path: trust a substantial local file without Civitai HEAD/API.
+    if local >= _CIVITAI_MIN_BYTES:
+        print(f"  skip (exists, size ok): {dest.name} ({local} bytes)")
+        return {
+            "path": str(dest.relative_to(REPO_ROOT)),
+            "skipped": True,
+            "bytes": local,
+            "expected_bytes": None,
+            **entry,
+        }
+
+    expected = civitai_expected_bytes(entry)
     if local_file_complete(dest, expected, min_bytes=_CIVITAI_MIN_BYTES):
         note = f"{local} bytes"
         if expected is not None:
@@ -470,6 +469,10 @@ def _hf_local_complete(path: Path, repo_id: str, filename: str, token: str | Non
     size = _file_size(path)
     if size <= 0:
         return False
+    # Fast path: avoid HF metadata round-trips when the blob is already large.
+    # AE ~336MB, transformer ~18GB — anything over 50MB is a real weight file.
+    if size >= 50_000_000:
+        return True
     expected = _hf_remote_size(repo_id, filename, token)
     if expected is None:
         # Without remote size, still reject empty/tiny stubs.
@@ -601,59 +604,77 @@ def download_hf_klein_stack(*, transformer: bool, text_stack: bool) -> list[dict
     if text_stack:
         te_dir = KLEIN_DIR / "text_encoder"
         tok_dir = KLEIN_DIR / "tokenizer"
-        print("  downloading text_encoder/tokenizer…")
-        snap = snapshot_download(
-            repo_id=HF_KLEIN_REPO,
-            allow_patterns=[f"{HF_TE_PREFIX}/*", f"{HF_TOKENIZER_PREFIX}/*"],
-            local_dir=str(KLEIN_DIR / "diffusers_te_tok"),
-            token=token,
-            tqdm_class=tqdm_cls,
-        )
-        snap_path = Path(snap)
-        src_te = snap_path / HF_TE_PREFIX
-        src_tok = snap_path / HF_TOKENIZER_PREFIX
-        copied = 0
-        skipped = 0
-        if src_te.is_dir():
-            te_dir.mkdir(parents=True, exist_ok=True)
-            for p in src_te.rglob("*"):
-                if p.is_file():
-                    rel = p.relative_to(src_te)
-                    out = te_dir / rel
-                    out.parent.mkdir(parents=True, exist_ok=True)
-                    src_n = _file_size(p)
-                    if out.exists() and _sizes_match(_file_size(out), src_n):
-                        skipped += 1
-                        continue
-                    out.write_bytes(p.read_bytes())
-                    copied += 1
-        if src_tok.is_dir():
-            tok_dir.mkdir(parents=True, exist_ok=True)
-            for p in src_tok.rglob("*"):
-                if p.is_file():
-                    rel = p.relative_to(src_tok)
-                    out = tok_dir / rel
-                    out.parent.mkdir(parents=True, exist_ok=True)
-                    src_n = _file_size(p)
-                    if out.exists() and _sizes_match(_file_size(out), src_n):
-                        skipped += 1
-                        continue
-                    out.write_bytes(p.read_bytes())
-                    copied += 1
-        results.append(
-            {
-                "role": "qwen3_text_encoder_and_tokenizer",
-                "repo": HF_KLEIN_REPO,
-                "path": str(KLEIN_DIR.relative_to(REPO_ROOT)),
-                "license": "bundled with Klein base (gated)",
-                "copied_files": copied,
-                "skipped_files": skipped,
-            }
-        )
-        print(
-            f"  text_encoder/tokenizer under {KLEIN_DIR} "
-            f"(copied {copied}, size-ok skip {skipped})"
-        )
+        te_n = sum(1 for p in te_dir.rglob("*") if p.is_file()) if te_dir.is_dir() else 0
+        tok_n = sum(1 for p in tok_dir.rglob("*") if p.is_file()) if tok_dir.is_dir() else 0
+        if te_n >= 3 and tok_n >= 3:
+            print(
+                f"  skip (exists): text_encoder/tokenizer under {KLEIN_DIR} "
+                f"({te_n}+{tok_n} files)"
+            )
+            results.append(
+                {
+                    "role": "qwen3_text_encoder_and_tokenizer",
+                    "repo": HF_KLEIN_REPO,
+                    "path": str(KLEIN_DIR.relative_to(REPO_ROOT)),
+                    "license": "bundled with Klein base (gated)",
+                    "copied_files": 0,
+                    "skipped_files": te_n + tok_n,
+                }
+            )
+        else:
+            print("  downloading text_encoder/tokenizer…")
+            snap = snapshot_download(
+                repo_id=HF_KLEIN_REPO,
+                allow_patterns=[f"{HF_TE_PREFIX}/*", f"{HF_TOKENIZER_PREFIX}/*"],
+                local_dir=str(KLEIN_DIR / "diffusers_te_tok"),
+                token=token,
+                tqdm_class=tqdm_cls,
+            )
+            snap_path = Path(snap)
+            src_te = snap_path / HF_TE_PREFIX
+            src_tok = snap_path / HF_TOKENIZER_PREFIX
+            copied = 0
+            skipped = 0
+            if src_te.is_dir():
+                te_dir.mkdir(parents=True, exist_ok=True)
+                for p in src_te.rglob("*"):
+                    if p.is_file():
+                        rel = p.relative_to(src_te)
+                        out = te_dir / rel
+                        out.parent.mkdir(parents=True, exist_ok=True)
+                        src_n = _file_size(p)
+                        if out.exists() and _sizes_match(_file_size(out), src_n):
+                            skipped += 1
+                            continue
+                        out.write_bytes(p.read_bytes())
+                        copied += 1
+            if src_tok.is_dir():
+                tok_dir.mkdir(parents=True, exist_ok=True)
+                for p in src_tok.rglob("*"):
+                    if p.is_file():
+                        rel = p.relative_to(src_tok)
+                        out = tok_dir / rel
+                        out.parent.mkdir(parents=True, exist_ok=True)
+                        src_n = _file_size(p)
+                        if out.exists() and _sizes_match(_file_size(out), src_n):
+                            skipped += 1
+                            continue
+                        out.write_bytes(p.read_bytes())
+                        copied += 1
+            results.append(
+                {
+                    "role": "qwen3_text_encoder_and_tokenizer",
+                    "repo": HF_KLEIN_REPO,
+                    "path": str(KLEIN_DIR.relative_to(REPO_ROOT)),
+                    "license": "bundled with Klein base (gated)",
+                    "copied_files": copied,
+                    "skipped_files": skipped,
+                }
+            )
+            print(
+                f"  text_encoder/tokenizer under {KLEIN_DIR} "
+                f"(copied {copied}, size-ok skip {skipped})"
+            )
 
     return results
 
@@ -751,8 +772,35 @@ def download_vlm() -> dict:
         ) from e
 
     print(f"=== vlm: {HF_VLM_REPO} ===")
-    print("  downloading VLM weights (large)…")
     VLM_DIR.mkdir(parents=True, exist_ok=True)
+    cfg = VLM_DIR / "config.json"
+    weight_bytes = 0
+    if VLM_DIR.is_dir():
+        for p in VLM_DIR.rglob("*.safetensors"):
+            weight_bytes += _file_size(p)
+        for p in VLM_DIR.rglob("*.bin"):
+            weight_bytes += _file_size(p)
+    # ~19GB BF16; treat >= 5GB + config as already present.
+    if cfg.is_file() and weight_bytes >= 5_000_000_000:
+        print(f"  skip (exists): {VLM_DIR} ({weight_bytes} bytes of weights)")
+        records = {
+            "ability": "vlm",
+            "downloaded_at": datetime.now(timezone.utc).isoformat(),
+            "repo": HF_VLM_REPO,
+            "path": str(VLM_DIR.resolve().relative_to(REPO_ROOT)),
+            "skipped": True,
+            "bytes": weight_bytes,
+            "notes": [
+                "Qwen3-VL-8B-Instruct ~19 GB BF16; run sequentially vs Klein 9B on 24 GB VRAM.",
+                "Install: pip install -e '.[vlm]'",
+            ],
+        }
+        manifest = MODELS_ROOT / "vlm_manifest.json"
+        manifest.write_text(json.dumps(records, indent=2), encoding="utf-8")
+        print(f"Wrote manifest {manifest}")
+        return records
+
+    print("  downloading VLM weights (large)…")
     token = _hf_token()  # optional; Qwen3-VL is typically public
     snap = snapshot_download(
         repo_id=HF_VLM_REPO,

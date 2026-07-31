@@ -11,6 +11,7 @@ import urllib.request
 from typing import Any
 
 from photoreal.config import get_settings
+from photoreal.portal.env_check import torch_cuda_available
 from photoreal.portal.paths import (
     COMFY_DIR,
     LOGS_DIR,
@@ -42,7 +43,7 @@ def api_command() -> list[str]:
 def comfy_command() -> list[str]:
     py = str(venv_python())
     extra = comfy_extra_config()
-    return [
+    cmd = [
         py,
         "main.py",
         "--listen",
@@ -52,6 +53,10 @@ def comfy_command() -> list[str]:
         "--extra-model-paths-config",
         str(extra.resolve()),
     ]
+    # ComfyUI crashes on import when torch is CPU-only unless --cpu is set.
+    if not torch_cuda_available():
+        cmd.append("--cpu")
+    return cmd
 
 
 def _probe(url: str, timeout: float = 2.0) -> bool:
@@ -60,6 +65,38 @@ def _probe(url: str, timeout: float = 2.0) -> bool:
             return 200 <= resp.status < 300
     except (urllib.error.URLError, TimeoutError, ValueError):
         return False
+
+
+def wait_for_comfy(
+    *,
+    timeout: float = 90.0,
+    interval: float = 1.0,
+    emit: Any | None = None,
+) -> bool:
+    """Poll Comfy ``/system_stats`` until up or timeout."""
+    import time
+
+    def _emit(msg: str) -> None:
+        if emit:
+            try:
+                emit(msg)
+            except Exception:  # noqa: BLE001
+                pass
+
+    settings = get_settings()
+    url = f"{settings.comfy_url.rstrip('/')}/system_stats"
+    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    last_note = -999.0
+    while time.monotonic() < deadline:
+        if _probe(url, timeout=min(2.0, interval)):
+            return True
+        elapsed = time.monotonic() - started
+        if elapsed - last_note >= 10.0:
+            _emit(f"waiting for Comfy… {elapsed:.0f}s / {timeout:.0f}s")
+            last_note = elapsed
+        time.sleep(interval)
+    return False
 
 
 def health_snapshot() -> dict[str, Any]:
@@ -72,6 +109,7 @@ def health_snapshot() -> dict[str, Any]:
         "platform": platform.system().lower(),
         "tmux_session": TMUX_SESSION if platform.system().lower() == "linux" else None,
         "logs_dir": str(LOGS_DIR),
+        "torch_cuda": torch_cuda_available(),
     }
 
 
@@ -136,21 +174,57 @@ def stop_stale_api(*, keep_pid: int | None = None) -> dict[str, Any]:
     }
 
 
-def start_all(*, ensure_comfy: bool = True) -> dict[str, Any]:
+def start_all(
+    *,
+    ensure_comfy: bool = True,
+    emit: Any | None = None,
+) -> dict[str, Any]:
     """Start/restart long-running services. Returns status dict."""
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     notes: list[str] = []
 
-    stop_info = stop_comfy()
-    notes.extend(stop_info.get("notes") or [])
+    def _note(msg: str) -> None:
+        notes.append(msg)
+        if emit:
+            try:
+                emit(msg)
+            except Exception:  # noqa: BLE001
+                pass
 
+    stop_info = stop_comfy()
+    for n in stop_info.get("notes") or []:
+        _note(str(n))
+
+    # Local Comfy is only needed for local CUDA generate. With Runpod configured
+    # and no CUDA, skip starting CPU Comfy (avoids long boot + 180s health wait).
+    skip_comfy = False
+    if ensure_comfy:
+        try:
+            from photoreal.portal.credentials import apply_env_to_process, load_credentials
+
+            apply_env_to_process()
+            creds = load_credentials()
+            has_runpod = bool(creds.get("runpod_token_set"))
+            backend = (creds.get("generate_backend") or "auto").strip().lower()
+            # Prefer Flash path when Runpod is set and we are not forcing local,
+            # without importing torch unless necessary.
+            if has_runpod and backend != "local":
+                if not torch_cuda_available():
+                    skip_comfy = True
+                    _note(
+                        "skip local Comfy (no CUDA; Runpod Flash configured for generate)"
+                    )
+        except Exception as exc:  # noqa: BLE001
+            _note(f"Runpod probe skipped ({exc}); starting local Comfy with --cpu")
+
+    want_comfy = ensure_comfy and not skip_comfy
     system = platform.system().lower()
     if system == "linux":
         from photoreal.portal.supervisor_linux import start_linux
 
         result = start_linux(
             api_cmd=api_command(),
-            comfy_cmd=comfy_command() if ensure_comfy else None,
+            comfy_cmd=comfy_command() if want_comfy else None,
             comfy_cwd=COMFY_DIR,
             repo_root=REPO_ROOT,
         )
@@ -159,7 +233,7 @@ def start_all(*, ensure_comfy: bool = True) -> dict[str, Any]:
 
         result = start_windows(
             api_cmd=api_command(),
-            comfy_cmd=comfy_command() if ensure_comfy else None,
+            comfy_cmd=comfy_command() if want_comfy else None,
             comfy_cwd=COMFY_DIR,
             repo_root=REPO_ROOT,
             logs_dir=LOGS_DIR,
@@ -170,7 +244,7 @@ def start_all(*, ensure_comfy: bool = True) -> dict[str, Any]:
 
             result = start_linux(
                 api_cmd=api_command(),
-                comfy_cmd=comfy_command() if ensure_comfy else None,
+                comfy_cmd=comfy_command() if want_comfy else None,
                 comfy_cwd=COMFY_DIR,
                 repo_root=REPO_ROOT,
             )
@@ -178,7 +252,20 @@ def start_all(*, ensure_comfy: bool = True) -> dict[str, Any]:
             raise RuntimeError(
                 f"Unsupported platform {system!r}: install tmux or use Linux/Windows launchers"
             )
-    result["notes"] = list(notes) + list(result.get("notes") or [])
+    for n in result.get("notes") or []:
+        _note(str(n))
+    result["notes"] = list(notes)
+    if want_comfy:
+        if not torch_cuda_available():
+            _note("Comfy started with --cpu (PyTorch has no CUDA on this machine)")
+        _note("waiting for Comfy /system_stats…")
+        # First boot can spend >90s on SQLite asset migrations + imports.
+        if wait_for_comfy(timeout=180.0, emit=emit):
+            _note("Comfy is healthy")
+        else:
+            _note(
+                f"Comfy did not become healthy within 180s — see {LOGS_DIR / 'comfy.log'}"
+            )
     result["health"] = health_snapshot()
     return result
 

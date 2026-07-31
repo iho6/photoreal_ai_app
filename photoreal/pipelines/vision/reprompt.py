@@ -113,13 +113,22 @@ class RepromptPipeline(Pipeline):
         pack_path: str | Path | None = None,
         unload: bool = True,
         engine: VlmEngine | None = None,
+        log: Any = None,
         **kwargs: Any,
     ) -> str:
         """
         Rewrite ``prompt`` into a Popo photoreal string.
 
         unload defaults True so callers can chain into photoreal_gen on 24 GB GPUs.
+        Optional ``log`` is a callable(str) for test/debug streaming.
         """
+        def _emit(msg: str) -> None:
+            if callable(log):
+                try:
+                    log(msg)
+                except Exception:  # noqa: BLE001
+                    pass
+
         self.validate(prompt=prompt)
         settings = get_settings()
         path = (
@@ -130,19 +139,33 @@ class RepromptPipeline(Pipeline):
         if not path.exists():
             path = DEFAULT_LOCAL_DIR
 
+        _emit(f"reprompt: model_path = {path}")
         pack = load_popo_pack(Path(pack_path) if pack_path else None)
         messages = build_reprompt_messages(
             prompt, pack=pack, max_exemplars=max_exemplars
         )
+        _emit(
+            f"reprompt: messages = {len(messages)} "
+            f"(system+exemplars+user, max_exemplars={max_exemplars})"
+        )
         eng = engine or get_vlm_engine(path)
         try:
+            _emit(f"reprompt: VLM generate (max_new_tokens={max_new_tokens})…")
             raw = eng.generate(
                 messages,
                 max_new_tokens=max_new_tokens,
                 sampling_profile="deterministic",
             )
-            return parse_rewritten(raw)
+            raw_s = raw if isinstance(raw, str) else str(raw)
+            limit = 4000
+            shown = raw_s if len(raw_s) <= limit else raw_s[:limit] + f"… (+{len(raw_s) - limit} chars)"
+            _emit(f"reprompt: raw VLM response ({len(raw_s)} chars):\n{shown}")
+            rewritten = parse_rewritten(raw_s)
+            _emit("reprompt: parsed rewritten prompt OK")
+            return rewritten
         finally:
             if unload:
+                _emit("reprompt: unloading VLM…")
                 eng.unload()
                 unload_vlm_engine()
+                _emit("reprompt: VLM unloaded")
