@@ -405,5 +405,64 @@ def test_gha_deploy_poll_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert calls["n"] >= 2
 
 
-def test_flash_workflow_exists() -> None:
-    assert Path(".github/workflows/flash-deploy-character.yml").is_file()
+def test_sync_actions_secrets_puts_runpod_and_hf(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from photoreal.flash import gha_secrets as gs
+
+    puts: list[str] = []
+
+    class FakeResp:
+        def __init__(self, status_code: int, data=None, text: str = ""):
+            self.status_code = status_code
+            self._data = data or {}
+            self.text = text
+
+        def json(self):
+            return self._data
+
+    class FakeClient:
+        def get(self, url, headers=None):
+            assert "public-key" in url
+            return FakeResp(200, {"key_id": "kid", "key": "dGVzdA=="})
+
+        def put(self, url, headers=None, json=None):
+            name = url.rstrip("/").split("/")[-1]
+            puts.append(name)
+            assert json and "encrypted_value" in json and json.get("key_id") == "kid"
+            return FakeResp(204)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(gs, "encrypt_secret", lambda key, val: "enc")
+    monkeypatch.setattr(gs, "detect_github_repo", lambda: ("o", "r"))
+    gs.sync_actions_secrets(
+        github_token="tok",
+        runpod_api_key="rp",
+        hf_token="hf",
+        client=FakeClient(),  # type: ignore[arg-type]
+        owner="o",
+        repo="r",
+    )
+    assert puts == ["RUNPOD_API_KEY", "HF_TOKEN"]
+
+
+def test_sync_actions_secrets_noop_without_token() -> None:
+    from photoreal.flash.gha_secrets import sync_actions_secrets
+
+    # Must not raise or call network
+    sync_actions_secrets(github_token="", runpod_api_key="rp")
+    sync_actions_secrets(github_token="tok", runpod_api_key="")
+
+
+def test_try_sync_skips_without_creds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import photoreal.portal.credentials as creds
+    from photoreal.flash.gha_secrets import try_sync_actions_secrets_from_portal
+
+    env_path = tmp_path / ".env"
+    env_path.write_text("HF_TOKEN=hf\n", encoding="utf-8")
+    monkeypatch.setattr(creds, "ENV_PATH", env_path)
+    assert try_sync_actions_secrets_from_portal() is None

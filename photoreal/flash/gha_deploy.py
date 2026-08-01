@@ -20,9 +20,10 @@ API = "https://api.github.com"
 GHA_TOKEN_MSG = (
     "Flash deploy needs Linux. This PC has no WSL distro, so the portal uses "
     "GitHub Actions.\n"
-    "Save a GitHub token on the portal with repo scope including "
-    "actions:write (classic: repo, or fine-grained: Actions Read/Write + Contents Read).\n"
-    "Also set repo Actions secrets RUNPOD_API_KEY (and optional HF_TOKEN).\n"
+    "Save a GitHub token on the portal with classic ``repo`` scope "
+    "(or fine-grained: Actions + Secrets + Contents).\n"
+    "Portal Save/Launch auto-pushes Actions secrets RUNPOD_API_KEY / HF_TOKEN "
+    "from the values you enter — no manual website secrets required.\n"
     "Or run the workflow manually: Actions → Flash deploy character → Run workflow.\n"
     "See docs/portal.md"
 )
@@ -123,6 +124,14 @@ def deploy_via_github_actions(
     token = (github_token or "").strip()
     if not token:
         raise RuntimeError(GHA_TOKEN_MSG)
+
+    # Refresh Actions secrets from portal .env before dispatch (best-effort)
+    try:
+        from photoreal.flash.gha_secrets import try_sync_actions_secrets_from_portal
+
+        try_sync_actions_secrets_from_portal(log=log)
+    except Exception as exc:  # noqa: BLE001
+        _emit(log, f"flash: pre-deploy secrets sync skipped ({exc})")
 
     if not owner or not repo:
         owner, repo = detect_github_repo()

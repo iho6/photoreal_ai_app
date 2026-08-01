@@ -9,6 +9,7 @@ from photoreal.flash.endpoints import (
     resolve_character_endpoint_id,
 )
 from photoreal.flash.gha_deploy import deploy_via_github_actions
+from photoreal.flash.gha_secrets import sync_actions_secrets, try_sync_actions_secrets_from_portal
 from photoreal.flash.volume_sync import (
     ensure_volume_models_ready,
     sync_volume_models,
@@ -24,6 +25,8 @@ __all__ = [
     "resolve_character_endpoint_id",
     "resolve_generate_backend",
     "run_character_via_runpod",
+    "sync_actions_secrets",
     "sync_volume_models",
+    "try_sync_actions_secrets_from_portal",
     "volume_models_complete",
 ]

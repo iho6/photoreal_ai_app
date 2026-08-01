@@ -240,6 +240,17 @@ def run_stage2(
     cancel = cancel or STATE.cancel
     tokens = assert_launch_credentials()
 
+    # Best-effort: push Runpod/HF into GitHub Actions secrets for Flash deploy GHA
+    try:
+        from photoreal.flash.gha_secrets import try_sync_actions_secrets_from_portal
+
+        def _sync_log(msg: str) -> None:
+            log(msg, "append")
+
+        try_sync_actions_secrets_from_portal(log=_sync_log)
+    except Exception as exc:  # noqa: BLE001
+        log(f"flash: Actions secrets sync skipped ({exc})", "append")
+
     py = str(venv_python())
     env = os.environ.copy()
 

@@ -78,7 +78,7 @@ def create_app() -> FastAPI:
     @app.post("/api/credentials")
     def post_credentials(body: CredentialsIn) -> dict[str, Any]:
         try:
-            return save_credentials(
+            out = save_credentials(
                 hf_token=body.hf_token,
                 civitai_api_token=body.civitai_api_token,
                 github_token=body.github_token,
@@ -90,6 +90,12 @@ def create_app() -> FastAPI:
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
+        from photoreal.flash.gha_secrets import try_sync_actions_secrets_from_portal
+
+        warn = try_sync_actions_secrets_from_portal()
+        if warn:
+            out = {**out, "actions_secrets_warning": warn}
+        return out
 
     @app.post("/api/launch")
     def post_launch(body: LaunchIn | None = None) -> dict[str, Any]:
@@ -108,6 +114,9 @@ def create_app() -> FastAPI:
                 )
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e)) from e
+            from photoreal.flash.gha_secrets import try_sync_actions_secrets_from_portal
+
+            try_sync_actions_secrets_from_portal()
         # Always restart — never 409 on relaunch
         result = bootstrap.start_launch_async(force=True)
         return result

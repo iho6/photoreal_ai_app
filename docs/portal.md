@@ -63,9 +63,10 @@ Docs: [Flash overview](https://docs.runpod.io/flash/overview), [Windows WSL2](ht
 
 One-time setup:
 
-1. Push this repo to GitHub (workflow file must be on the default branch you dispatch).
-2. Repo **Settings → Secrets and variables → Actions**: add `RUNPOD_API_KEY`, optional `HF_TOKEN`.
-3. On the portal, save a **GitHub token** with permission to dispatch workflows (`actions:write` / classic `repo`).
+1. Push this repo to GitHub (workflow file must be on the branch you dispatch).
+2. On the portal, save **Runpod API key**, **HF token**, and a **GitHub token** with classic `repo` scope (or fine-grained: **Actions** + **Secrets** + **Contents**).
+
+Save or Launch **auto-pushes** Actions secrets `RUNPOD_API_KEY` and `HF_TOKEN` to the GitHub repo via API — you do not need to enter them under Settings → Secrets on the website (unless the token lacks Secrets permission).
 
 Then **Generate** auto-deploys when `photoreal-character-4090` is missing. Manual: **Actions → Flash deploy character → Run workflow**.
 
