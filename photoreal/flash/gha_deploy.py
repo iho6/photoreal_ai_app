@@ -125,13 +125,19 @@ def deploy_via_github_actions(
     if not token:
         raise RuntimeError(GHA_TOKEN_MSG)
 
-    # Refresh Actions secrets from portal .env before dispatch (best-effort)
-    try:
-        from photoreal.flash.gha_secrets import try_sync_actions_secrets_from_portal
+    # Must sync Actions secrets before dispatch (empty RUNPOD_API_KEY fails the workflow)
+    from photoreal.flash.gha_secrets import try_sync_actions_secrets_from_portal
+    from photoreal.portal.credentials import apply_env_to_process, load_credentials
 
-        try_sync_actions_secrets_from_portal(log=log)
-    except Exception as exc:  # noqa: BLE001
-        _emit(log, f"flash: pre-deploy secrets sync skipped ({exc})")
+    apply_env_to_process()
+    creds = load_credentials()
+    if (creds.get("runpod_api_key") or "").strip():
+        sync_err = try_sync_actions_secrets_from_portal(log=log)
+        if sync_err:
+            raise RuntimeError(
+                "Cannot dispatch Flash deploy: failed to sync GitHub Actions secrets "
+                f"(RUNPOD_API_KEY must exist on the repo).\n{sync_err}"
+            )
 
     if not owner or not repo:
         owner, repo = detect_github_repo()

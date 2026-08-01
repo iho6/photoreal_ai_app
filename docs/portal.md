@@ -120,7 +120,7 @@ Generate logs show `backend=local|runpod`, endpoint id, and remote log lines. Co
 
 ### Network Volume model layout
 
-Endpoint mounts volume `photoreal-models` at `/runpod-volume/` (datacenter `US-GA-2`). Workers need Comfy + weights on that volume — local `data/` on your PC is **not** used by Flash.
+Endpoint mounts volume `photoreal-models` at `/runpod-volume/` (datacenter `US-KS-2`, matching `runpod-flash` `DataCenter`). Workers need Comfy + weights on that volume — local `data/` on your PC is **not** used by Flash.
 
 **Completeness check (automated):** before Generate submits a job, the portal ensures the volume passes a file/size layout check (Flux klein + LoRAs + VLM + `runtime/comfyui/main.py` + extra-paths yaml). If incomplete (or `FLASH_VOLUME_SYNCED` unset), it starts a short-lived Runpod pod attached to the volume that:
 

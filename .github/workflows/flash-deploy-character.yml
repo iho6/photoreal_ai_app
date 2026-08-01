@@ -24,7 +24,8 @@ jobs:
           python-version: "3.11"
 
       - name: Install Flash CLI
-        run: python -m pip install -q "runpod-flash"
+        # Pin major.minor floor so NetworkVolume DataCenter validation matches scripts.
+        run: python -m pip install -q "runpod-flash>=1.19.0,<2"
 
       - name: Flash deploy character endpoint
         env:

@@ -10,7 +10,7 @@ from photoreal.portal.paths import COMFY_REQUIREMENTS, LOGS_DIR, REPO_ROOT
 
 COMFY_STAMP = LOGS_DIR / "comfy_reqs.sha256"
 
-PORTAL_MODULES = ("fastapi", "uvicorn", "dotenv")
+PORTAL_MODULES = ("fastapi", "uvicorn", "dotenv", "httpx", "nacl")
 EXTRAS_MODULES = ("huggingface_hub", "httpx", "websocket", "transformers")
 COMFY_PROBE_MODULES = ("aiohttp", "einops", "safetensors")
 

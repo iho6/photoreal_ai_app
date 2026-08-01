@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from base64 import b64encode
 from typing import Callable
 
@@ -18,6 +20,11 @@ SECRETS_TOKEN_MSG = (
     "See docs/portal.md"
 )
 
+NACL_MISSING_MSG = (
+    "PyNaCl (nacl) is required to encrypt GitHub Actions secrets. "
+    "Re-Launch the portal (installs .[portal]) or run: pip install pynacl"
+)
+
 
 def _emit(log: LogFn | None, msg: str) -> None:
     if log:
@@ -27,8 +34,34 @@ def _emit(log: LogFn | None, msg: str) -> None:
             pass
 
 
+def ensure_nacl(*, log: LogFn | None = None) -> None:
+    """Import nacl; try one pip install if missing."""
+    try:
+        import nacl  # noqa: F401
+
+        return
+    except ImportError:
+        pass
+    _emit(log, "flash: installing pynacl for Actions secrets encryption…")
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-q", "pynacl>=1.5.0"],
+            check=True,
+            timeout=180,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"{NACL_MISSING_MSG} ({exc})") from exc
+    try:
+        import nacl  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError(NACL_MISSING_MSG) from exc
+
+
 def encrypt_secret(public_key_b64: str, secret_value: str) -> str:
     """Libsodium sealed-box encrypt for GitHub Actions secrets API."""
+    ensure_nacl()
     from nacl import encoding, public
 
     pub = public.PublicKey(public_key_b64.encode("utf-8"), encoding.Base64Encoder())
@@ -57,6 +90,8 @@ def sync_actions_secrets(
     hf = (hf_token or "").strip()
     if not token or not runpod:
         return
+
+    ensure_nacl(log=log)
 
     if not owner or not repo:
         owner, repo = detect_github_repo()

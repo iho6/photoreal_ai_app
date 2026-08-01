@@ -24,26 +24,32 @@ import json
 import os
 
 from runpod_flash import (
-    DataCenter,
     Endpoint,
     GpuType,
     NetworkVolume,
     PodTemplate,
 )
 
+from photoreal.flash.volume_layout import (
+    VOLUME_NAME,
+    VOLUME_SIZE_GB,
+    flash_datacenter,
+)
 from photoreal.flash.worker_character import character_generate_impl
 
-# Adjust datacenter to match where you create/sync the volume.
+# Datacenter must match volume sync (VOLUME_DATACENTER) and Flash SDK enum.
+_DC = flash_datacenter()
 _VOLUME = NetworkVolume(
-    name="photoreal-models",
-    size=200,
-    datacenter=DataCenter.US_GA_2,
+    name=VOLUME_NAME,
+    size=VOLUME_SIZE_GB,
+    datacenter=_DC,
 )
 
 
 @Endpoint(
     name="photoreal-character-4090",
     gpu=GpuType.NVIDIA_GEFORCE_RTX_4090,
+    datacenter=_DC,
     workers=(0, 1),
     idle_timeout=300,
     volume=_VOLUME,

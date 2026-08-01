@@ -37,9 +37,11 @@ echo "=== Flash deploy character endpoint ==="
 echo "FLASH_APP=$FLASH_APP FLASH_ENV=$FLASH_ENV"
 echo "repo=$ROOT"
 
+FLASH_PKG='runpod-flash>=1.19.0,<2'
+
 if ! command -v flash >/dev/null 2>&1; then
-  echo "Installing runpod-flash…"
-  python3 -m pip install -q 'runpod-flash'
+  echo "Installing $FLASH_PKG…"
+  python3 -m pip install -q "$FLASH_PKG"
 fi
 
 # Ensure flash CLI is on PATH after pip install --user / venv
@@ -47,7 +49,7 @@ if ! command -v flash >/dev/null 2>&1; then
   if [[ -x "$ROOT/.venv/bin/flash" ]]; then
     export PATH="$ROOT/.venv/bin:$PATH"
   else
-    python3 -m pip install -q 'runpod-flash'
+    python3 -m pip install -q "$FLASH_PKG"
     export PATH="$(python3 -m site --user-base)/bin:${PATH:-}"
   fi
 fi

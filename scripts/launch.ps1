@@ -20,7 +20,18 @@ function Test-ApiHealth {
 }
 
 function Test-PortalDeps {
-  & $VenvPython -c "import fastapi; import uvicorn; import dotenv" 2>$null
+  # Keep in sync with photoreal.portal.install_probe.PORTAL_MODULES (incl. nacl/pynacl).
+  & $VenvPython -c @"
+try:
+    from photoreal.portal.install_probe import portal_deps_satisfied
+    raise SystemExit(0 if portal_deps_satisfied() else 1)
+except Exception:
+    import importlib.util
+    for m in ('fastapi', 'uvicorn', 'dotenv', 'httpx', 'nacl'):
+        if importlib.util.find_spec(m) is None:
+            raise SystemExit(1)
+    raise SystemExit(0)
+"@
   return ($LASTEXITCODE -eq 0)
 }
 

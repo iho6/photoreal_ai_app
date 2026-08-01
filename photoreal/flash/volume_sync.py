@@ -66,7 +66,7 @@ def ensure_network_volume_id(
     client: httpx.Client | None = None,
     log: LogFn | None = None,
 ) -> str:
-    """Return id for volume ``photoreal-models`` in US-GA-2 (create if missing)."""
+    """Return id for volume ``photoreal-models`` in ``VOLUME_DATACENTER`` (create if missing)."""
     key = (api_key or "").strip()
     if not key:
         raise RuntimeError("RUNPOD_API_KEY required to ensure Network Volume")

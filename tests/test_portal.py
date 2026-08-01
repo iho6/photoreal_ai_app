@@ -11,6 +11,17 @@ def test_portal_extra_in_pyproject() -> None:
     text = Path("pyproject.toml").read_text(encoding="utf-8")
     assert "portal = [" in text
     assert "fastapi" in text
+    assert "pynacl" in text
+
+
+def test_launch_scripts_probe_nacl() -> None:
+    """Stage-1 must reinstall .[portal] when nacl/pynacl is missing."""
+    ps1 = Path("scripts/launch.ps1").read_text(encoding="utf-8")
+    sh = Path("scripts/launch.sh").read_text(encoding="utf-8")
+    assert "portal_deps_satisfied" in ps1
+    assert "nacl" in ps1
+    assert "portal_deps_satisfied" in sh
+    assert "nacl" in sh
 
 
 def test_launch_scripts_exist() -> None:

@@ -275,6 +275,14 @@ def test_ensure_network_volume_reuses() -> None:
     mock.post.assert_not_called()
 
 
+def test_flash_datacenter_resolves_volume_dc() -> None:
+    from photoreal.flash.volume_layout import VOLUME_DATACENTER, flash_datacenter
+
+    dc = flash_datacenter()
+    assert getattr(dc, "value", None) == VOLUME_DATACENTER
+    assert VOLUME_DATACENTER == "US-KS-2"
+
+
 def test_looks_like_no_distro() -> None:
     from photoreal.flash.deploy import WSL_NO_DISTRO_MSG, _looks_like_no_distro
 
@@ -393,6 +401,18 @@ def test_gha_deploy_poll_success(monkeypatch: pytest.MonkeyPatch) -> None:
             pass
 
     monkeypatch.setattr(gha.time, "sleep", lambda s: None)
+    monkeypatch.setattr(
+        "photoreal.portal.credentials.apply_env_to_process",
+        lambda: {},
+    )
+    monkeypatch.setattr(
+        "photoreal.portal.credentials.load_credentials",
+        lambda: {"runpod_api_key": "rp", "github_token": "tok", "hf_token": "hf"},
+    )
+    monkeypatch.setattr(
+        "photoreal.flash.gha_secrets.try_sync_actions_secrets_from_portal",
+        lambda log=None: None,
+    )
     gha.deploy_via_github_actions(
         github_token="tok",
         owner="o",
@@ -403,6 +423,50 @@ def test_gha_deploy_poll_success(monkeypatch: pytest.MonkeyPatch) -> None:
         poll_interval_s=0,
     )
     assert calls["n"] >= 2
+
+
+def test_gha_deploy_blocks_when_secrets_sync_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from photoreal.flash import gha_deploy as gha
+
+    posted = {"n": 0}
+
+    class FakeClient:
+        def post(self, *a, **k):
+            posted["n"] += 1
+            raise AssertionError("dispatch must not run")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "photoreal.portal.credentials.apply_env_to_process",
+        lambda: {},
+    )
+    monkeypatch.setattr(
+        "photoreal.portal.credentials.load_credentials",
+        lambda: {"runpod_api_key": "rp", "github_token": "tok", "hf_token": ""},
+    )
+    monkeypatch.setattr(
+        "photoreal.flash.gha_secrets.try_sync_actions_secrets_from_portal",
+        lambda log=None: "No module named 'nacl'",
+    )
+    with pytest.raises(RuntimeError, match="failed to sync GitHub Actions secrets"):
+        gha.deploy_via_github_actions(
+            github_token="tok",
+            owner="o",
+            repo="r",
+            ref="main",
+            client=FakeClient(),  # type: ignore[arg-type]
+        )
+    assert posted["n"] == 0
+
+
+def test_portal_deps_require_nacl() -> None:
+    from photoreal.portal.install_probe import PORTAL_MODULES
+
+    assert "nacl" in PORTAL_MODULES
 
 
 def test_sync_actions_secrets_puts_runpod_and_hf(
@@ -436,6 +500,7 @@ def test_sync_actions_secrets_puts_runpod_and_hf(
             pass
 
     monkeypatch.setattr(gs, "encrypt_secret", lambda key, val: "enc")
+    monkeypatch.setattr(gs, "ensure_nacl", lambda log=None: None)
     monkeypatch.setattr(gs, "detect_github_repo", lambda: ("o", "r"))
     gs.sync_actions_secrets(
         github_token="tok",

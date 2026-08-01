@@ -3,11 +3,37 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 VOLUME_NAME = "photoreal-models"
-VOLUME_DATACENTER = "US-GA-2"
+# Must be a value accepted by runpod-flash DataCenter / NetworkVolume (SDK enum
+# lags marketing docs — US-GA-2 is documented but rejected by runpod-flash 1.19).
+VOLUME_DATACENTER = "US-KS-2"
 VOLUME_SIZE_GB = 200
 READY_MARKER = ".photoreal_volume_ready"
+
+
+def flash_datacenter() -> Any:
+    """Return ``runpod_flash.DataCenter`` for ``VOLUME_DATACENTER``.
+
+    Raises ``RuntimeError`` with available DCs if the preferred id is missing
+    from the installed SDK (so Flash deploy fails with a clear message).
+    """
+    from runpod_flash import DataCenter
+
+    attr = VOLUME_DATACENTER.replace("-", "_")
+    member = getattr(DataCenter, attr, None)
+    if member is not None:
+        return member
+    for dc in DataCenter:
+        if getattr(dc, "value", None) == VOLUME_DATACENTER or str(dc) == VOLUME_DATACENTER:
+            return dc
+    available = [getattr(dc, "value", str(dc)) for dc in DataCenter]
+    raise RuntimeError(
+        f"runpod-flash DataCenter has no {VOLUME_DATACENTER!r}. "
+        f"Update VOLUME_DATACENTER in photoreal.flash.volume_layout. "
+        f"Available: {available}"
+    )
 
 
 def volume_root_candidates() -> tuple[Path, ...]:
