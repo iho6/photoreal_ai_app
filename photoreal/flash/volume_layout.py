@@ -6,9 +6,10 @@ from pathlib import Path
 from typing import Any
 
 VOLUME_NAME = "photoreal-models"
-# Must be a value accepted by runpod-flash DataCenter / NetworkVolume (SDK enum
-# lags marketing docs — US-GA-2 is documented but rejected by runpod-flash 1.19).
-VOLUME_DATACENTER = "US-KS-2"
+# Must be accepted by runpod-flash DataCenter AND support network volumes
+# on the live Runpod API (SDK/docs can lag). US-KS-2 is in the SDK enum but
+# rejected at volume create ("not found or does not support network volumes").
+VOLUME_DATACENTER = "US-CA-2"
 VOLUME_SIZE_GB = 200
 READY_MARKER = ".photoreal_volume_ready"
 

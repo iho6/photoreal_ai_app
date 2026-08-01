@@ -5,7 +5,7 @@
 | **App id** | `character` |
 | **Endpoint name** | `photoreal-character-4090` |
 | **GPU** | `GpuType.NVIDIA_GEFORCE_RTX_4090` |
-| **Datacenter** | `US-KS-2` (`VOLUME_DATACENTER`) |
+| **Datacenter** | `US-CA-2` (`VOLUME_DATACENTER`) |
 | **Network volume** | `photoreal-models` @ `/runpod-volume/` |
 | **Worker** | `photoreal.flash.worker_character.character_generate_impl` |
 | **Portal cache** | `.env` → `FLASH_CHARACTER_ENDPOINT` |

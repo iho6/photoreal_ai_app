@@ -321,7 +321,7 @@ def test_flash_datacenter_resolves_volume_dc() -> None:
 
     dc = flash_datacenter()
     assert getattr(dc, "value", None) == VOLUME_DATACENTER
-    assert VOLUME_DATACENTER == "US-KS-2"
+    assert VOLUME_DATACENTER == "US-CA-2"
 
 
 def test_looks_like_no_distro() -> None:

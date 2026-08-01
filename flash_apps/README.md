@@ -6,7 +6,7 @@ One app = one serverless endpoint = one ≤1.5 GB artifact. Do **not** put mul
 
 | App id | Endpoint name | GPU | Volume | Status | Deploy |
 |--------|---------------|-----|--------|--------|--------|
-| `character` | `photoreal-character-4090` | RTX 4090 | `photoreal-models` @ US-KS-2 | active | `bash scripts/flash_deploy_app.sh character` |
+| `character` | `photoreal-character-4090` | RTX 4090 | `photoreal-models` @ US-CA-2 | active | `bash scripts/flash_deploy_app.sh character` |
 | `wan_animate` | TBD | TBD | TBD | planned | — |
 
 Per-app details live in `<app>/META.md`. Shared CUDA excludes: `_shared/excludes.txt`.
