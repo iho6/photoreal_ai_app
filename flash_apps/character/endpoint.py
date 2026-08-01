@@ -47,15 +47,29 @@ _VOLUME = NetworkVolume(
         "HF_TOKEN": os.environ.get("HF_TOKEN", ""),
         "PHOTOREAL_DATA_ROOT": "/runpod-volume/data",
     },
-    # Torch/vision are on the Flash GPU base image — omit so they are not
-    # pulled into the 1.5GB artifact (see flash_apps/_shared/excludes.txt).
+    # Torch/vision are on the Flash GPU base image. Use --no-deps on deploy
+    # (scripts/flash_deploy_app.sh) and list direct packages only so pip does not
+    # pull nvidia CUDA wheels into the 1.5GB artifact.
     dependencies=[
         "transformers>=4.57.0",
         "accelerate>=1.0.0",
+        "tokenizers",
+        "safetensors",
+        "huggingface_hub",
         "Pillow",
         "httpx",
         "websocket-client",
-        "huggingface_hub",
+        "regex",
+        "tqdm",
+        "PyYAML",
+        "filelock",
+        "packaging",
+        "requests",
+        "anyio",
+        "httpcore",
+        "idna",
+        "certifi",
+        "typing_extensions",
     ],
 )
 def character_generate(prompt: str = "") -> dict:

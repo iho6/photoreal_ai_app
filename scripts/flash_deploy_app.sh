@@ -93,13 +93,18 @@ fi
 echo "Staging MANIFEST → $APP_DIR/photoreal/"
 python3 "$ROOT/flash_apps/_shared/stage_from_manifest.py" "$APP_DIR" --repo "$ROOT"
 
+# Default --no-deps: transformers' transitive tree pulls nvidia CUDA wheels that
+# blow the 1.5GB limit even when listed in --exclude. Override with FLASH_NO_DEPS=0.
+USE_NO_DEPS="${FLASH_NO_DEPS:-1}"
+
 cd "$APP_DIR"
 DEPLOY_CMD=(flash deploy --env "$FLASH_ENV")
 if [[ -n "$EXCLUDE_ARG" ]]; then
   DEPLOY_CMD+=(--exclude "$EXCLUDE_ARG")
 fi
-if [[ "${FLASH_NO_DEPS:-}" == "1" ]]; then
+if [[ "$USE_NO_DEPS" == "1" ]]; then
   DEPLOY_CMD+=(--no-deps)
+  echo "no-deps=1 (set FLASH_NO_DEPS=0 to install transitive deps)"
 fi
 echo "Running: ${DEPLOY_CMD[*]}"
 "${DEPLOY_CMD[@]}"

@@ -29,4 +29,5 @@ Windows without WSL: portal Generate dispatches GitHub Actions `flash-deploy-app
 
 - Code staged from `MANIFEST.txt` only (no portal/web/runtime).
 - Pip excludes: `flash_apps/_shared/excludes.txt` (torch + nvidia CUDA wheels).
+- Deploy uses `--no-deps` by default so transformers does not pull CUDA wheels; endpoint `dependencies=` lists needed direct packages.
 - Weights + ComfyUI: Network Volume only (see docs/portal.md).
