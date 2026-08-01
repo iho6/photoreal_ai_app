@@ -1,13 +1,12 @@
-# Deploy Flash character endpoint (photoreal-character-4090) on Ubuntu.
-# Manual: Actions → Flash deploy character → Run workflow
-# Portal (Windows without WSL): auto-dispatches via GITHUB_TOKEN
+# Legacy alias — prefer "Flash deploy app" (flash-deploy-app.yml).
+# Kept so old bookmarks / docs still work; always deploys character.
 name: Flash deploy character
 
 on:
   workflow_dispatch:
 
 concurrency:
-  group: flash-deploy-character
+  group: flash-deploy-app-character
   cancel-in-progress: false
 
 jobs:
@@ -24,19 +23,17 @@ jobs:
           python-version: "3.11"
 
       - name: Install Flash CLI
-        # Pin major.minor floor so NetworkVolume DataCenter validation matches scripts.
         run: python -m pip install -q "runpod-flash>=1.19.0,<2"
 
-      - name: Flash deploy character endpoint
+      - name: Flash deploy character
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          FLASH_APP: photoreal-character
           FLASH_ENV: production
         run: |
           if [ -z "${RUNPOD_API_KEY}" ]; then
             echo "ERROR: repo secret RUNPOD_API_KEY is required" >&2
             exit 1
           fi
-          chmod +x scripts/flash_deploy_character.sh
+          chmod +x scripts/flash_deploy_app.sh scripts/flash_deploy_character.sh
           bash scripts/flash_deploy_character.sh

@@ -1,0 +1,53 @@
+# Deploy one Flash app from flash_apps/<app>/ (bare-minimum artifact).
+# Manual: Actions → Flash deploy app → Run workflow (pick app id)
+# Portal (Windows without WSL): auto-dispatches with app=character for Generate
+name: Flash deploy app
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: "flash_apps/<id> (see flash_apps/README.md)"
+        required: true
+        default: character
+        type: choice
+        options:
+          - character
+          # Add new apps here when endpoint.py + MANIFEST.txt exist:
+          # - wan_animate
+
+concurrency:
+  group: flash-deploy-app-${{ inputs.app || 'character' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Flash CLI
+        run: python -m pip install -q "runpod-flash>=1.19.0,<2"
+
+      - name: Flash deploy app
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          FLASH_ENV: production
+          FLASH_APP_ID: ${{ inputs.app }}
+        run: |
+          if [ -z "${RUNPOD_API_KEY}" ]; then
+            echo "ERROR: repo secret RUNPOD_API_KEY is required" >&2
+            exit 1
+          fi
+          APP="${FLASH_APP_ID:-character}"
+          echo "Deploying flash_apps/$APP"
+          chmod +x scripts/flash_deploy_app.sh
+          bash scripts/flash_deploy_app.sh "$APP"

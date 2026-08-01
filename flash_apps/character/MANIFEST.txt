@@ -1,0 +1,16 @@
+# Allowlist of monorepo paths staged into flash_apps/character/photoreal/
+# for Flash discovery/packaging. One path per line (file or directory).
+# Do NOT list photoreal/flash/__init__.py — monorepo version imports portal/GHA.
+# stage_from_manifest.py writes minimal package __init__.py files.
+photoreal/__init__.py
+photoreal/config/
+photoreal/flash/worker_character.py
+photoreal/flash/volume_layout.py
+photoreal/pipelines/__init__.py
+photoreal/pipelines/base.py
+photoreal/pipelines/vision/reprompt.py
+photoreal/pipelines/vision/prompts/
+photoreal/pipelines/image/photoreal_gen.py
+photoreal/services/__init__.py
+photoreal/services/vlm_engine.py
+photoreal/services/comfy_client.py

@@ -50,10 +50,12 @@ Optional: GitHub token. Flash character endpoint id (`FLASH_CHARACTER_ENDPOINT`)
 
 ## Runpod Flash (character Generate)
 
+Flash apps live under [`flash_apps/`](../flash_apps/README.md) — **one folder per endpoint** (own GPU, deps, ≤1.5 GB artifact). Character Generate uses `flash_apps/character/` (`photoreal-character-4090` on RTX 4090). Future features (e.g. WAN animate) get their own folder; see the index table in that README and each app’s `META.md`.
+
 Flash setup is **required** for Launch (portal Runpod API key). Flash CLI is **macOS/Linux only**. On Windows:
 
-- **No WSL distro (recommended here):** Generate dispatches GitHub Actions (`.github/workflows/flash-deploy-character.yml`) when the endpoint is missing.
-- **WSL2 + Ubuntu:** local `.\scripts\flash_deploy_character.ps1` as before.
+- **No WSL distro (recommended here):** Generate dispatches GitHub Actions (`.github/workflows/flash-deploy-app.yml`, `app=character`) when the endpoint is missing.
+- **WSL2 + Ubuntu:** `.\scripts\flash_deploy_app.ps1 character` (or `.\scripts\flash_deploy_character.ps1`).
 
 The portal calls Runpod Serverless HTTP with the saved key after deploy.
 
@@ -68,7 +70,7 @@ One-time setup:
 
 Save or Launch **auto-pushes** Actions secrets `RUNPOD_API_KEY` and `HF_TOKEN` to the GitHub repo via API — you do not need to enter them under Settings → Secrets on the website (unless the token lacks Secrets permission).
 
-Then **Generate** auto-deploys when `photoreal-character-4090` is missing. Manual: **Actions → Flash deploy character → Run workflow**.
+Then **Generate** auto-deploys when `photoreal-character-4090` is missing. Manual: **Actions → Flash deploy app → Run workflow** (app=`character`).
 
 ### Windows: WSL distro (optional alternative)
 
@@ -84,18 +86,18 @@ Reboot if prompted, open **Ubuntu** once, then `.\scripts\flash_deploy_character
 1. Save **Runpod API key** (and on Windows without WSL: **GitHub token**) on the portal.
 2. Either:
    - Click **Generate** once — missing endpoint triggers Flash deploy (GHA on Windows without WSL, else local/WSL); **or**
-   - Manually: Actions workflow / `.\scripts\flash_deploy_character.ps1` / `bash scripts/flash_deploy_character.sh`.
+   - Manually: Actions → Flash deploy app / `.\scripts\flash_deploy_app.ps1 character` / `bash scripts/flash_deploy_app.sh character`.
 3. Network Volume models are **auto-synced on first Generate** when incomplete (see below); or run `python scripts/flash_sync_volume.py`.
 
-`flash deploy` skips `/runtime/` (listed in `.gitignore`) so local Comfy/Flux trees are not imported during discovery — those live on the Network Volume.
+Deploy stages an allowlisted `photoreal/` subset into `flash_apps/character/` and excludes torch/nvidia CUDA wheels (`flash_apps/_shared/excludes.txt`) so the artifact stays under RunPod’s 1.5 GB limit. Comfy/weights stay on the Network Volume.
 
 ### Smoke (RTX 4090)
 
 ```bash
 # in WSL, from repo root
 pip install runpod-flash
-flash login                 # or rely on portal .env RUNPOD_API_KEY
-flash deploy
+# or rely on portal .env RUNPOD_API_KEY
+bash scripts/flash_deploy_app.sh character
 python scripts/flash_smoke_4090.py
 ```
 
@@ -105,7 +107,7 @@ Success log must show a real `NVIDIA GeForce RTX 4090` string.
 
 ```powershell
 # Windows (WSL)
-.\scripts\flash_deploy_character.ps1
+.\scripts\flash_deploy_app.ps1 character
 ```
 
 Portal resolves endpoint id by name `photoreal-character-4090` (API key only) and caches it in `.env`.

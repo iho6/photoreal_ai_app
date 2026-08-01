@@ -21,7 +21,7 @@ WSL_NO_DISTRO_MSG = (
     "WSL has no Linux distribution installed (Flash CLI needs Linux). "
     "Preferred on this setup: save GITHUB_TOKEN on the portal and set repo "
     "Actions secrets RUNPOD_API_KEY — Generate will dispatch "
-    ".github/workflows/flash-deploy-character.yml.\n"
+    ".github/workflows/flash-deploy-app.yml (app=character).\n"
     "Or install a distro: wsl --install -d Ubuntu (elevated PowerShell), "
     "then retry.\n"
     "See docs/portal.md"
@@ -202,8 +202,8 @@ def _windows_cmd(wsl: str) -> list[str]:
     wsl_root = f"/mnt/{drive}{tail}"
     inner = (
         f"cd '{wsl_root}' && "
-        "sed -i 's/\\r$//' scripts/flash_deploy_character.sh && "
-        "chmod +x scripts/flash_deploy_character.sh && "
-        "bash scripts/flash_deploy_character.sh"
+        "sed -i 's/\\r$//' scripts/flash_deploy_app.sh && "
+        "chmod +x scripts/flash_deploy_app.sh scripts/flash_deploy_character.sh && "
+        "bash scripts/flash_deploy_app.sh character"
     )
     return [wsl, "-e", "bash", "-lc", inner]

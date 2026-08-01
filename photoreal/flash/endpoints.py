@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 import httpx
 
-# Must match @Endpoint(name=...) in scripts/flash_character_endpoint.py
+# Must match @Endpoint(name=...) in flash_apps/character/endpoint.py
 CHARACTER_ENDPOINT_NAME = "photoreal-character-4090"
 
 ENDPOINTS_URL = "https://rest.runpod.io/v1/endpoints"

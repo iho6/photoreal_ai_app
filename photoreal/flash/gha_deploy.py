@@ -14,7 +14,8 @@ from photoreal.portal.paths import REPO_ROOT
 
 LogFn = Callable[[str], None]
 
-WORKFLOW_FILE = "flash-deploy-character.yml"
+WORKFLOW_FILE = "flash-deploy-app.yml"
+DEFAULT_FLASH_APP_ID = "character"
 API = "https://api.github.com"
 
 GHA_TOKEN_MSG = (
@@ -24,7 +25,8 @@ GHA_TOKEN_MSG = (
     "(or fine-grained: Actions + Secrets + Contents).\n"
     "Portal Save/Launch auto-pushes Actions secrets RUNPOD_API_KEY / HF_TOKEN "
     "from the values you enter — no manual website secrets required.\n"
-    "Or run the workflow manually: Actions → Flash deploy character → Run workflow.\n"
+    "Or run the workflow manually: Actions → Flash deploy app → Run workflow.\n"
+    "Apps live under flash_apps/ (see flash_apps/README.md).\n"
     "See docs/portal.md"
 )
 
@@ -115,15 +117,17 @@ def deploy_via_github_actions(
     owner: str | None = None,
     repo: str | None = None,
     ref: str | None = None,
+    app_id: str = DEFAULT_FLASH_APP_ID,
 ) -> None:
     """
-    workflow_dispatch flash-deploy-character.yml and wait for success.
+    workflow_dispatch flash-deploy-app.yml for ``flash_apps/<app_id>`` and wait.
 
     Requires a PAT with actions:write on the repository.
     """
     token = (github_token or "").strip()
     if not token:
         raise RuntimeError(GHA_TOKEN_MSG)
+    app = (app_id or DEFAULT_FLASH_APP_ID).strip() or DEFAULT_FLASH_APP_ID
 
     # Must sync Actions secrets before dispatch (empty RUNPOD_API_KEY fails the workflow)
     from photoreal.flash.gha_secrets import try_sync_actions_secrets_from_portal
@@ -152,12 +156,20 @@ def deploy_via_github_actions(
     owns = client is None
     http = client or httpx.Client(timeout=httpx.Timeout(60.0))
     try:
-        _emit(log, f"flash: dispatching GitHub Actions {WORKFLOW_FILE} @ {owner}/{repo} ref={ref}")
+        _emit(
+            log,
+            f"flash: dispatching GitHub Actions {WORKFLOW_FILE} "
+            f"app={app} @ {owner}/{repo} ref={ref}",
+        )
         before = time.time()
         dispatch_url = (
             f"{API}/repos/{owner}/{repo}/actions/workflows/{WORKFLOW_FILE}/dispatches"
         )
-        resp = http.post(dispatch_url, headers=headers, json={"ref": ref})
+        resp = http.post(
+            dispatch_url,
+            headers=headers,
+            json={"ref": ref, "inputs": {"app": app}},
+        )
         if resp.status_code == 404:
             raise RuntimeError(
                 f"Workflow {WORKFLOW_FILE} not found on {owner}/{repo} "

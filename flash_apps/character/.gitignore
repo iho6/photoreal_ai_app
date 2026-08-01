@@ -1,0 +1,4 @@
+# Staged copy from monorepo MANIFEST (refreshed on every deploy)
+photoreal/
+.flash/
+*.tar.gz

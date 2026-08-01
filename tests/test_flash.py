@@ -188,17 +188,58 @@ def test_ensure_auto_deploy_then_resolve(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_flash_scripts_exist() -> None:
     assert Path("scripts/flash_smoke_4090.py").is_file()
-    assert Path("scripts/flash_character_endpoint.py").is_file()
+    assert Path("scripts/flash_deploy_app.sh").is_file()
+    assert Path("scripts/flash_deploy_app.ps1").is_file()
     assert Path("scripts/flash_deploy_character.sh").is_file()
     assert Path("scripts/flash_deploy_character.ps1").is_file()
     assert Path("scripts/flash_sync_volume.py").is_file()
     assert Path("scripts/flash_volume_bootstrap.sh").is_file()
     assert Path("scripts/flash_comfyui_extra_model_paths.yaml").is_file()
+    assert Path("flash_apps/README.md").is_file()
+    assert Path("flash_apps/character/endpoint.py").is_file()
+    assert Path("flash_apps/character/MANIFEST.txt").is_file()
+    assert Path("flash_apps/character/META.md").is_file()
+    assert Path("flash_apps/wan_animate/META.md").is_file()
+    assert Path("flash_apps/_shared/excludes.txt").is_file()
+    assert Path("flash_apps/_shared/stage_from_manifest.py").is_file()
+    assert Path(".github/workflows/flash-deploy-app.yml").is_file()
     assert Path("photoreal/flash/client.py").is_file()
     assert Path("photoreal/flash/endpoints.py").is_file()
     assert Path("photoreal/flash/deploy.py").is_file()
     assert Path("photoreal/flash/volume_sync.py").is_file()
     assert Path("photoreal/flash/volume_layout.py").is_file()
+
+
+def test_stage_character_manifest(tmp_path: Path) -> None:
+    """Staging copies allowlisted modules and stubs flash/__init__.py."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "stage_from_manifest",
+        "flash_apps/_shared/stage_from_manifest.py",
+    )
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    app = Path("flash_apps/character")
+    # Stage into a temp copy of the app dir so we don't touch the tree permanently
+    stage_app = tmp_path / "character"
+    stage_app.mkdir()
+    for name in ("MANIFEST.txt", "endpoint.py", "META.md"):
+        shutil_copy = __import__("shutil").copy2
+        shutil_copy(app / name, stage_app / name)
+
+    n = mod.stage(stage_app, repo=Path(".").resolve())
+    assert n > 5
+    assert (stage_app / "photoreal" / "flash" / "worker_character.py").is_file()
+    assert (stage_app / "photoreal" / "flash" / "volume_layout.py").is_file()
+    init = (stage_app / "photoreal" / "flash" / "__init__.py").read_text(encoding="utf-8")
+    assert "deploy_character" not in init
+    assert "gha_deploy" not in init
+    # Must not have pulled portal helpers via heavy flash/__init__
+    assert not (stage_app / "photoreal" / "flash" / "gha_deploy.py").exists()
+    assert not (stage_app / "photoreal" / "portal").exists()
 
 
 def test_volume_models_complete_detects_gaps(tmp_path: Path) -> None:
@@ -370,6 +411,7 @@ def test_gha_deploy_poll_success(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeClient:
         def post(self, url, headers=None, json=None):
             assert "dispatches" in url
+            assert json and json.get("inputs", {}).get("app") == "character"
             return FakeResp(204)
 
         def get(self, url, headers=None, params=None):

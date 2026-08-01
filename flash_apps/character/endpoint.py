@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""Flash character endpoint: auto-reprompt + photoreal_gen on RTX 4090.
+
+Deploy from this directory (via scripts/flash_deploy_app.sh character), not the
+monorepo root — see flash_apps/README.md and META.md.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+
+from runpod_flash import (
+    Endpoint,
+    GpuType,
+    NetworkVolume,
+    PodTemplate,
+)
+
+from photoreal.flash.volume_layout import (
+    VOLUME_NAME,
+    VOLUME_SIZE_GB,
+    flash_datacenter,
+)
+from photoreal.flash.worker_character import character_generate_impl
+
+# Datacenter must match volume sync (VOLUME_DATACENTER) and Flash SDK enum.
+_DC = flash_datacenter()
+_VOLUME = NetworkVolume(
+    name=VOLUME_NAME,
+    size=VOLUME_SIZE_GB,
+    datacenter=_DC,
+)
+
+
+@Endpoint(
+    name="photoreal-character-4090",
+    gpu=GpuType.NVIDIA_GEFORCE_RTX_4090,
+    datacenter=_DC,
+    workers=(0, 1),
+    idle_timeout=300,
+    volume=_VOLUME,
+    template=PodTemplate(containerDiskInGb=40),
+    execution_timeout_ms=600_000,
+    env={
+        "HF_TOKEN": os.environ.get("HF_TOKEN", ""),
+        "PHOTOREAL_DATA_ROOT": "/runpod-volume/data",
+    },
+    # Torch/vision are on the Flash GPU base image — omit so they are not
+    # pulled into the 1.5GB artifact (see flash_apps/_shared/excludes.txt).
+    dependencies=[
+        "transformers>=4.57.0",
+        "accelerate>=1.0.0",
+        "Pillow",
+        "httpx",
+        "websocket-client",
+        "huggingface_hub",
+    ],
+)
+def character_generate(prompt: str = "") -> dict:
+    """Queue worker entry — input: {\"prompt\": \"...\"}."""
+    return character_generate_impl(prompt)
+
+
+async def main() -> None:
+    """Optional local invoke after ``flash deploy`` (Linux/WSL)."""
+    demo = os.environ.get("FLASH_DEMO_PROMPT", "a woman in a red coat")
+    print(f"Calling photoreal-character-4090 prompt={demo!r}…")
+    result = await character_generate(demo)
+    summary = {
+        "ok": result.get("ok"),
+        "rewritten": (result.get("rewritten") or "")[:200],
+        "n_images": len(result.get("images_b64") or []),
+        "logs_tail": (result.get("logs") or [])[-8:],
+        "error": result.get("error"),
+    }
+    print(json.dumps(summary, indent=2))
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

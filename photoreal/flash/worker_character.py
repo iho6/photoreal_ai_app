@@ -1,7 +1,7 @@
 """Character generate logic intended to run on a Flash RTX 4090 worker.
 
-Used by ``scripts/flash_character_endpoint.py``. Prefers Network Volume layout
-under ``/runpod-volume/`` (see docs/portal.md).
+Used by ``flash_apps/character/endpoint.py``. Prefers Network Volume layout
+under ``/runpod-volume/`` (see docs/portal.md and flash_apps/character/META.md).
 """
 
 from __future__ import annotations
