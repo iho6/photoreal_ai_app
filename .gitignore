@@ -44,6 +44,9 @@ runtime/comfyui/.venv/
 # Tracked files under runtime/ stay in git; new untracked paths are ignored.
 /runtime/
 
+# Staged copies for Flash deploy (refreshed by scripts/flash_deploy_app.sh)
+flash_apps/*/photoreal/
+
 # Model weights / large binaries
 *.safetensors
 *.ckpt

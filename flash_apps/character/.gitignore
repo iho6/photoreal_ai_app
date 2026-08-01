@@ -1,4 +1,4 @@
-# Staged copy from monorepo MANIFEST (refreshed on every deploy)
-photoreal/
+# Build artifacts only — do NOT ignore photoreal/ here (Flash reads this file
+# and would refuse to ship the staged worker package).
 .flash/
 *.tar.gz
