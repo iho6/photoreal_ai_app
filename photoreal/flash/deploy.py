@@ -1,4 +1,4 @@
-"""Deploy the Flash character endpoint (WSL on Windows, native on Linux)."""
+"""Deploy the Flash character endpoint (WSL/Linux local, or GitHub Actions on Windows)."""
 
 from __future__ import annotations
 
@@ -16,12 +16,15 @@ LogFn = Callable[[str], None]
 DEPLOY_SH = REPO_ROOT / "scripts" / "flash_deploy_character.sh"
 DEPLOY_PS1 = REPO_ROOT / "scripts" / "flash_deploy_character.ps1"
 
+# Kept for tests / messaging when GHA token is absent
 WSL_NO_DISTRO_MSG = (
     "WSL has no Linux distribution installed (Flash CLI needs Linux). "
-    "In an elevated PowerShell run:  wsl --install -d Ubuntu\n"
-    "Reboot if prompted, open Ubuntu once to finish setup, then retry Generate "
-    "or: .\\scripts\\flash_deploy_character.ps1\n"
-    "See docs/portal.md and https://docs.runpod.io/flash/windows-wsl2"
+    "Preferred on this setup: save GITHUB_TOKEN on the portal and set repo "
+    "Actions secrets RUNPOD_API_KEY — Generate will dispatch "
+    ".github/workflows/flash-deploy-character.yml.\n"
+    "Or install a distro: wsl --install -d Ubuntu (elevated PowerShell), "
+    "then retry.\n"
+    "See docs/portal.md"
 )
 
 
@@ -80,8 +83,9 @@ def deploy_character_endpoint(*, log: LogFn | None = None, timeout_s: float = 90
     """
     Run Flash deploy for photoreal-character-4090.
 
-    Uses portal ``.env`` RUNPOD_API_KEY. On Windows requires WSL2 **with a distro**.
-    Streams subprocess output into ``log``.
+    Uses portal ``.env`` RUNPOD_API_KEY. On Windows without a WSL distro,
+    dispatches GitHub Actions (needs ``GITHUB_TOKEN``). Otherwise runs the
+    local/WSL deploy script. Streams progress into ``log``.
     """
     apply_env_to_process()
     creds = load_credentials()
@@ -90,6 +94,19 @@ def deploy_character_endpoint(*, log: LogFn | None = None, timeout_s: float = 90
         raise RuntimeError(
             "RUNPOD_API_KEY missing — save it on the portal before Flash deploy"
         )
+
+    system = platform.system().lower()
+    if system == "windows" and not wsl_has_distro():
+        from photoreal.flash.gha_deploy import deploy_via_github_actions
+
+        gh = (creds.get("github_token") or "").strip()
+        _emit(log, "flash: no WSL distro — deploying via GitHub Actions…")
+        deploy_via_github_actions(
+            github_token=gh,
+            log=log,
+            timeout_s=max(timeout_s, 2700.0),
+        )
+        return
 
     env = os.environ.copy()
     env["RUNPOD_API_KEY"] = api_key
@@ -100,17 +117,19 @@ def deploy_character_endpoint(*, log: LogFn | None = None, timeout_s: float = 90
     env.setdefault("FLASH_ENV", "production")
     env["PYTHONUNBUFFERED"] = "1"
 
-    system = platform.system().lower()
     if system == "windows":
         wsl = _wsl_exe()
         if not wsl:
-            raise RuntimeError(
-                "WSL not found. Install WSL2 then a distro:\n"
-                "  wsl --install -d Ubuntu\n"
-                "See https://docs.runpod.io/flash/windows-wsl2"
+            from photoreal.flash.gha_deploy import deploy_via_github_actions
+
+            gh = (creds.get("github_token") or "").strip()
+            _emit(log, "flash: WSL not found — deploying via GitHub Actions…")
+            deploy_via_github_actions(
+                github_token=gh,
+                log=log,
+                timeout_s=max(timeout_s, 2700.0),
             )
-        if not wsl_has_distro():
-            raise RuntimeError(WSL_NO_DISTRO_MSG)
+            return
         cmd = _windows_cmd(wsl)
     else:
         cmd = _unix_cmd()
@@ -130,8 +149,8 @@ def deploy_character_endpoint(*, log: LogFn | None = None, timeout_s: float = 90
     except FileNotFoundError as exc:
         raise RuntimeError(
             f"Flash deploy failed to start ({exc}). "
-            "On Windows: wsl --install -d Ubuntu, then "
-            ".\\scripts\\flash_deploy_character.ps1"
+            "On Windows without WSL: set GITHUB_TOKEN and Actions secret RUNPOD_API_KEY, "
+            "or install Ubuntu via wsl --install -d Ubuntu. See docs/portal.md"
         ) from exc
 
     assert proc.stdout is not None
@@ -146,10 +165,20 @@ def deploy_character_endpoint(*, log: LogFn | None = None, timeout_s: float = 90
     joined = "\n".join(chunks)
     if code != 0:
         if _looks_like_no_distro(joined):
-            raise RuntimeError(WSL_NO_DISTRO_MSG)
+            from photoreal.flash.gha_deploy import deploy_via_github_actions
+
+            gh = (creds.get("github_token") or "").strip()
+            _emit(log, "flash: WSL reported no distro — falling back to GitHub Actions…")
+            deploy_via_github_actions(
+                github_token=gh,
+                log=log,
+                timeout_s=max(timeout_s, 2700.0),
+            )
+            return
         raise RuntimeError(
             f"Flash deploy exited {code}. Fix WSL/flash login, then retry Generate "
             "or run: .\\scripts\\flash_deploy_character.ps1\n"
+            "Or use GitHub Actions (docs/portal.md). "
             "Models on Network Volume photoreal-models are checked/synced on Generate "
             "(or: python scripts/flash_sync_volume.py)."
         )

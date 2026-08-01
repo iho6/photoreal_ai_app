@@ -8,6 +8,7 @@ from photoreal.flash.endpoints import (
     ensure_character_endpoint_id,
     resolve_character_endpoint_id,
 )
+from photoreal.flash.gha_deploy import deploy_via_github_actions
 from photoreal.flash.volume_sync import (
     ensure_volume_models_ready,
     sync_volume_models,
@@ -17,6 +18,7 @@ from photoreal.flash.volume_sync import (
 __all__ = [
     "CHARACTER_ENDPOINT_NAME",
     "deploy_character_endpoint",
+    "deploy_via_github_actions",
     "ensure_character_endpoint_id",
     "ensure_volume_models_ready",
     "resolve_character_endpoint_id",

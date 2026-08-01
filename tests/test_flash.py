@@ -296,8 +296,114 @@ def test_deploy_raises_clear_msg_when_no_wsl_distro(
     monkeypatch.setattr(
         deploy,
         "load_credentials",
-        lambda: {"runpod_api_key": "rp", "hf_token": ""},
+        lambda: {"runpod_api_key": "rp", "hf_token": "", "github_token": ""},
     )
     monkeypatch.setattr(deploy, "apply_env_to_process", lambda: {})
-    with pytest.raises(RuntimeError, match="wsl --install -d Ubuntu"):
+    with pytest.raises(RuntimeError, match="GitHub Actions|GITHUB_TOKEN"):
         deploy.deploy_character_endpoint()
+
+
+def test_parse_github_owner_repo() -> None:
+    from photoreal.flash.gha_deploy import parse_github_owner_repo
+
+    assert parse_github_owner_repo("git@github.com:acme/photoreal_ai_app.git") == (
+        "acme",
+        "photoreal_ai_app",
+    )
+    assert parse_github_owner_repo("https://github.com/acme/photoreal_ai_app.git") == (
+        "acme",
+        "photoreal_ai_app",
+    )
+
+
+def test_deploy_windows_no_wsl_uses_gha(monkeypatch: pytest.MonkeyPatch) -> None:
+    import photoreal.flash.deploy as deploy
+
+    called: dict[str, object] = {}
+
+    def fake_gha(*, github_token: str, log=None, timeout_s: float = 2700.0) -> None:
+        called["token"] = github_token
+        called["timeout_s"] = timeout_s
+
+    monkeypatch.setattr(deploy.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(deploy, "wsl_has_distro", lambda: False)
+    monkeypatch.setattr(
+        deploy,
+        "load_credentials",
+        lambda: {
+            "runpod_api_key": "rp",
+            "hf_token": "hf",
+            "github_token": "ghp_test",
+        },
+    )
+    monkeypatch.setattr(deploy, "apply_env_to_process", lambda: {})
+    monkeypatch.setattr(
+        "photoreal.flash.gha_deploy.deploy_via_github_actions",
+        fake_gha,
+    )
+    deploy.deploy_character_endpoint()
+    assert called.get("token") == "ghp_test"
+
+
+def test_gha_deploy_poll_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    from photoreal.flash import gha_deploy as gha
+
+    class FakeResp:
+        def __init__(self, status_code: int, data=None, text: str = ""):
+            self.status_code = status_code
+            self._data = data
+            self.text = text
+
+        def json(self):
+            return self._data
+
+    calls = {"n": 0}
+
+    class FakeClient:
+        def post(self, url, headers=None, json=None):
+            assert "dispatches" in url
+            return FakeResp(204)
+
+        def get(self, url, headers=None, params=None):
+            calls["n"] += 1
+            if "runs/" in url and url.rstrip("/").split("/")[-1].isdigit():
+                return FakeResp(
+                    200,
+                    {
+                        "status": "completed",
+                        "conclusion": "success",
+                        "html_url": "https://github.com/o/r/actions/runs/1",
+                    },
+                )
+            return FakeResp(
+                200,
+                {
+                    "workflow_runs": [
+                        {
+                            "id": 99,
+                            "status": "in_progress",
+                            "created_at": "2099-01-01T00:00:00Z",
+                            "html_url": "https://github.com/o/r/actions/runs/99",
+                        }
+                    ]
+                },
+            )
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(gha.time, "sleep", lambda s: None)
+    gha.deploy_via_github_actions(
+        github_token="tok",
+        owner="o",
+        repo="r",
+        ref="main",
+        client=FakeClient(),  # type: ignore[arg-type]
+        timeout_s=60,
+        poll_interval_s=0,
+    )
+    assert calls["n"] >= 2
+
+
+def test_flash_workflow_exists() -> None:
+    assert Path(".github/workflows/flash-deploy-character.yml").is_file()

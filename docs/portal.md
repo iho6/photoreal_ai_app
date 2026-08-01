@@ -50,27 +50,40 @@ Optional: GitHub token. Flash character endpoint id (`FLASH_CHARACTER_ENDPOINT`)
 
 ## Runpod Flash (character Generate)
 
-Flash setup is **required** for Launch (portal Runpod API key). Flash CLI is **macOS/Linux only**; on Windows deploy uses **WSL2 with a Linux distro** (having the WSL *feature* alone is not enough). The portal calls Runpod Serverless HTTP with the saved key.
+Flash setup is **required** for Launch (portal Runpod API key). Flash CLI is **macOS/Linux only**. On Windows:
+
+- **No WSL distro (recommended here):** Generate dispatches GitHub Actions (`.github/workflows/flash-deploy-character.yml`) when the endpoint is missing.
+- **WSL2 + Ubuntu:** local `.\scripts\flash_deploy_character.ps1` as before.
+
+The portal calls Runpod Serverless HTTP with the saved key after deploy.
 
 Docs: [Flash overview](https://docs.runpod.io/flash/overview), [Windows WSL2](https://docs.runpod.io/flash/windows-wsl2).
 
-### Windows: install a WSL distro (one-time)
+### Windows: Flash deploy via GitHub Actions (no local Ubuntu)
 
-If Generate/deploy logs say **no installed distributions**:
+One-time setup:
+
+1. Push this repo to GitHub (workflow file must be on the default branch you dispatch).
+2. Repo **Settings → Secrets and variables → Actions**: add `RUNPOD_API_KEY`, optional `HF_TOKEN`.
+3. On the portal, save a **GitHub token** with permission to dispatch workflows (`actions:write` / classic `repo`).
+
+Then **Generate** auto-deploys when `photoreal-character-4090` is missing. Manual: **Actions → Flash deploy character → Run workflow**.
+
+### Windows: WSL distro (optional alternative)
 
 ```powershell
 # elevated PowerShell
 wsl --install -d Ubuntu
 ```
 
-Reboot if prompted, open **Ubuntu** once to finish user setup, then continue below.
+Reboot if prompted, open **Ubuntu** once, then `.\scripts\flash_deploy_character.ps1`.
 
 ### First-time character endpoint deploy
 
-1. Save **Runpod API key** on the portal.
+1. Save **Runpod API key** (and on Windows without WSL: **GitHub token**) on the portal.
 2. Either:
-   - Click **Generate** once — if `photoreal-character-4090` is missing, the portal auto-runs Flash deploy via WSL; **or**
-   - Manually: `.\scripts\flash_deploy_character.ps1` (Windows) / `bash scripts/flash_deploy_character.sh` (Linux/WSL).
+   - Click **Generate** once — missing endpoint triggers Flash deploy (GHA on Windows without WSL, else local/WSL); **or**
+   - Manually: Actions workflow / `.\scripts\flash_deploy_character.ps1` / `bash scripts/flash_deploy_character.sh`.
 3. Network Volume models are **auto-synced on first Generate** when incomplete (see below); or run `python scripts/flash_sync_volume.py`.
 
 ### Smoke (RTX 4090)

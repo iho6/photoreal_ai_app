@@ -65,7 +65,8 @@ def resolve_character_endpoint_id(
     if not matches:
         raise EndpointNotFoundError(
             f"No Runpod endpoint named {name!r}. "
-            "Deploy with .\\scripts\\flash_deploy_character.ps1 (WSL) or retry Generate "
+            "Deploy with GitHub Actions (Windows without WSL) or "
+            ".\\scripts\\flash_deploy_character.ps1 (WSL), or retry Generate "
             "to auto-deploy."
         )
 
