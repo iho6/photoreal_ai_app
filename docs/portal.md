@@ -87,6 +87,8 @@ Reboot if prompted, open **Ubuntu** once, then `.\scripts\flash_deploy_character
    - Manually: Actions workflow / `.\scripts\flash_deploy_character.ps1` / `bash scripts/flash_deploy_character.sh`.
 3. Network Volume models are **auto-synced on first Generate** when incomplete (see below); or run `python scripts/flash_sync_volume.py`.
 
+`flash deploy` skips `/runtime/` (listed in `.gitignore`) so local Comfy/Flux trees are not imported during discovery — those live on the Network Volume.
+
 ### Smoke (RTX 4090)
 
 ```bash
