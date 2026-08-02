@@ -62,6 +62,38 @@ class ComfyClient:
         r.raise_for_status()
         return r.content
 
+    def upload_image(
+        self,
+        path: str | Path,
+        *,
+        subfolder: str = "photoreal_sam3_inputs",
+        overwrite: bool = True,
+    ) -> str:
+        """Upload a local image to ComfyUI input; return LoadImage ``image`` ref."""
+        src = Path(path)
+        if not src.is_file():
+            raise ComfyClientError(f"Image not found: {src}")
+        data = {
+            "subfolder": subfolder,
+            "overwrite": "true" if overwrite else "false",
+            "type": "input",
+        }
+        files = {"image": (src.name, src.read_bytes(), "application/octet-stream")}
+        r = httpx.post(
+            f"{self.base_url}/upload/image",
+            data=data,
+            files=files,
+            timeout=120.0,
+        )
+        if r.status_code >= 400:
+            raise ComfyClientError(f"Comfy /upload/image failed: {r.status_code} {r.text}")
+        body = r.json()
+        name = str(body.get("name") or src.name).strip()
+        sub = str(body.get("subfolder") or subfolder or "").strip()
+        if sub:
+            return f"{sub}/{name}".replace("\\", "/")
+        return name
+
     def run_workflow(self, prompt: dict[str, Any]) -> list[tuple[str, bytes]]:
         """Queue workflow, wait, return list of (filename, png_bytes)."""
         prompt_id = self.queue_prompt(prompt)

@@ -19,6 +19,12 @@ from photoreal.services.vlm_engine import (
 PROMPTS_PATH = (
     Path(__file__).resolve().parent / "prompts" / "popo_photoreal_reprompt.json"
 )
+CHARACTER_PROMPTS_PATH = (
+    Path(__file__).resolve().parent / "prompts" / "character_reprompt.json"
+)
+BACKDROP_PROMPTS_PATH = (
+    Path(__file__).resolve().parent / "prompts" / "backdrop_reprompt.json"
+)
 
 _JSON_RE = re.compile(r"\{[\s\S]*\}")
 

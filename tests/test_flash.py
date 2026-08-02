@@ -305,7 +305,7 @@ def test_volume_sync_needed_respects_flag(
 
 def test_ensure_network_volume_reuses() -> None:
     from photoreal.flash.volume_layout import VOLUME_DATACENTER, VOLUME_NAME
-    from photoreal.flash.volume_sync import ensure_network_volume_id
+    from photoreal.flash.volume_sync import ensure_network_volume, ensure_network_volume_id
 
     mock = MagicMock()
     mock.get.return_value.status_code = 200
@@ -313,7 +313,35 @@ def test_ensure_network_volume_reuses() -> None:
         {"id": "vol1", "name": VOLUME_NAME, "dataCenterId": VOLUME_DATACENTER},
     ]
     assert ensure_network_volume_id("key", client=mock) == "vol1"
+    vid, dc = ensure_network_volume("key", client=mock)
+    assert vid == "vol1"
+    assert dc == VOLUME_DATACENTER
     mock.post.assert_not_called()
+
+
+def test_ensure_network_volume_skips_wrong_dc() -> None:
+    """Same name in another DC must not be reused — create in VOLUME_DATACENTER."""
+    from photoreal.flash.volume_layout import VOLUME_DATACENTER, VOLUME_NAME
+    from photoreal.flash.volume_sync import ensure_network_volume
+
+    mock = MagicMock()
+    mock.get.return_value.status_code = 200
+    mock.get.return_value.json.return_value = [
+        {"id": "old", "name": VOLUME_NAME, "dataCenterId": "US-GA-2"},
+    ]
+    mock.post.return_value.status_code = 200
+    mock.post.return_value.json.return_value = {
+        "id": "new",
+        "dataCenterId": VOLUME_DATACENTER,
+    }
+    logs: list[str] = []
+    vid, dc = ensure_network_volume("key", client=mock, log=logs.append)
+    assert vid == "new"
+    assert dc == VOLUME_DATACENTER
+    mock.post.assert_called_once()
+    body = mock.post.call_args.kwargs.get("json") or mock.post.call_args[1].get("json")
+    assert body["dataCenterId"] == VOLUME_DATACENTER
+    assert any("ignoring" in m for m in logs)
 
 
 def test_flash_datacenter_resolves_volume_dc() -> None:

@@ -1,0 +1,56 @@
+{
+  "1": {
+    "inputs": {
+      "image": "input.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "2": {
+    "inputs": {
+      "model_name": "depth_anything_3_mono_large.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "LoadDA3Model",
+    "_meta": {
+      "title": "Load Depth Anything 3"
+    }
+  },
+  "3": {
+    "inputs": {
+      "da3_model": ["2", 0],
+      "image": ["1", 0],
+      "resolution": 504,
+      "resize_method": "upper_bound_resize",
+      "mode": "mono"
+    },
+    "class_type": "DA3Inference",
+    "_meta": {
+      "title": "Run Depth Anything 3"
+    }
+  },
+  "4": {
+    "inputs": {
+      "da3_geometry": ["3", 0],
+      "output": "depth",
+      "normalization": "v2_style",
+      "apply_sky_clip": false
+    },
+    "class_type": "DA3Render",
+    "_meta": {
+      "title": "Render Depth"
+    }
+  },
+  "5": {
+    "inputs": {
+      "filename_prefix": "da3_depth",
+      "images": ["4", 0]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Depth"
+    }
+  }
+}

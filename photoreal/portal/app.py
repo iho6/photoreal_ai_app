@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -15,6 +15,11 @@ from pydantic import BaseModel, Field
 from photoreal.config import get_settings
 from photoreal.portal import bootstrap
 from photoreal.portal import character_jobs
+from photoreal.portal import character_inpaint_jobs
+from photoreal.portal import character_pose_lock_jobs
+from photoreal.portal import depth_jobs
+from photoreal.portal import sam3_jobs
+from photoreal.portal import voice_vosk
 from photoreal.portal.credentials import load_credentials, save_credentials
 from photoreal.portal.paths import WEB_ROOT
 from photoreal.portal.supervisor import dry_run_commands, health_snapshot
@@ -223,9 +228,237 @@ def create_app() -> FastAPI:
     def character_gallery() -> dict[str, Any]:
         return {"items": character_jobs.list_gallery()}
 
+    @app.post("/api/sam3/segment")
+    async def sam3_segment(
+        image: UploadFile = File(...),
+        job: str = Form("image_mask"),
+        text_prompt: str = Form(""),
+        positive_coords: str = Form("[]"),
+        negative_coords: str = Form("[]"),
+        threshold: float = Form(0.5),
+        refine_iterations: int = Form(2),
+        comfy_url: str | None = Form(None),
+    ) -> dict[str, Any]:
+        """Enqueue SAM3 segmentation (multipart: image + optional text/points)."""
+        import json as _json
+        import tempfile
+
+        try:
+            pos = _json.loads(positive_coords or "[]")
+            neg = _json.loads(negative_coords or "[]")
+        except _json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail=f"invalid coords JSON: {e}") from e
+        if not isinstance(pos, list) or not isinstance(neg, list):
+            raise HTTPException(status_code=400, detail="coords must be JSON lists")
+
+        suffix = Path(image.filename or "input.png").suffix or ".png"
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        try:
+            data = await image.read()
+            if not data:
+                raise HTTPException(status_code=400, detail="empty image upload")
+            tmp.write(data)
+            tmp.close()
+            return sam3_jobs.start_segment(
+                image_path=Path(tmp.name),
+                job=job,
+                text_prompt=text_prompt,
+                positive_coords=pos,
+                negative_coords=neg,
+                threshold=threshold,
+                refine_iterations=refine_iterations,
+                comfy_url=comfy_url or None,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        finally:
+            try:
+                Path(tmp.name).unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
+
+    @app.get("/api/sam3/jobs/{job_id}")
+    def sam3_job(job_id: str) -> dict[str, Any]:
+        job = sam3_jobs.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="job not found")
+        return job
+
+    @app.post("/api/depth/convert")
+    async def depth_convert(
+        image: UploadFile = File(...),
+        mask: UploadFile = File(...),
+        feather_px: int = Form(7),
+        comfy_url: str | None = Form(None),
+    ) -> dict[str, Any]:
+        """Enqueue person-only depth convert (multipart: image + SAM mask)."""
+        import tempfile
+
+        img_suffix = Path(image.filename or "frame.png").suffix or ".png"
+        mask_suffix = Path(mask.filename or "mask.png").suffix or ".png"
+        img_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=img_suffix)
+        mask_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=mask_suffix)
+        try:
+            img_data = await image.read()
+            mask_data = await mask.read()
+            if not img_data:
+                raise HTTPException(status_code=400, detail="empty image upload")
+            if not mask_data:
+                raise HTTPException(status_code=400, detail="empty mask upload")
+            img_tmp.write(img_data)
+            img_tmp.close()
+            mask_tmp.write(mask_data)
+            mask_tmp.close()
+            return depth_jobs.start_convert(
+                image_path=Path(img_tmp.name),
+                mask_path=Path(mask_tmp.name),
+                feather_px=feather_px,
+                comfy_url=comfy_url or None,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        finally:
+            for tmp in (img_tmp, mask_tmp):
+                try:
+                    Path(tmp.name).unlink(missing_ok=True)
+                except Exception:  # noqa: BLE001
+                    pass
+
+    @app.get("/api/depth/jobs/{job_id}")
+    def depth_job(job_id: str) -> dict[str, Any]:
+        job = depth_jobs.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="job not found")
+        return job
+
+    @app.post("/api/character/inpaint")
+    async def character_inpaint(
+        scene: UploadFile = File(...),
+        mask: UploadFile = File(...),
+        reference: UploadFile = File(...),
+        prompt: str = Form(""),
+        denoise: float = Form(0.95),
+        comfy_url: str | None = Form(None),
+    ) -> dict[str, Any]:
+        """Enqueue character-into-scene inpaint (multipart: scene + mask + reference)."""
+        import tempfile
+
+        scene_suf = Path(scene.filename or "scene.png").suffix or ".png"
+        mask_suf = Path(mask.filename or "mask.png").suffix or ".png"
+        ref_suf = Path(reference.filename or "reference.png").suffix or ".png"
+        scene_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=scene_suf)
+        mask_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=mask_suf)
+        ref_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ref_suf)
+        try:
+            scene_data = await scene.read()
+            mask_data = await mask.read()
+            ref_data = await reference.read()
+            if not scene_data:
+                raise HTTPException(status_code=400, detail="empty scene upload")
+            if not mask_data:
+                raise HTTPException(status_code=400, detail="empty mask upload")
+            if not ref_data:
+                raise HTTPException(status_code=400, detail="empty reference upload")
+            scene_tmp.write(scene_data)
+            scene_tmp.close()
+            mask_tmp.write(mask_data)
+            mask_tmp.close()
+            ref_tmp.write(ref_data)
+            ref_tmp.close()
+            return character_inpaint_jobs.start_inpaint(
+                scene_path=Path(scene_tmp.name),
+                mask_path=Path(mask_tmp.name),
+                reference_path=Path(ref_tmp.name),
+                prompt=prompt,
+                denoise=denoise,
+                comfy_url=comfy_url or None,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        finally:
+            for tmp in (scene_tmp, mask_tmp, ref_tmp):
+                try:
+                    Path(tmp.name).unlink(missing_ok=True)
+                except Exception:  # noqa: BLE001
+                    pass
+
+    @app.get("/api/character/inpaint/jobs/{job_id}")
+    def character_inpaint_job(job_id: str) -> dict[str, Any]:
+        job = character_inpaint_jobs.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="job not found")
+        return job
+
+    @app.post("/api/character/pose-lock")
+    async def character_pose_lock(
+        depth: UploadFile = File(...),
+        reference: UploadFile = File(...),
+        prompt: str = Form("refcontrol"),
+        comfy_url: str | None = Form(None),
+    ) -> dict[str, Any]:
+        """Enqueue pose lock via RefControl depth (multipart: depth + lighting bake)."""
+        import tempfile
+
+        depth_suf = Path(depth.filename or "depth.png").suffix or ".png"
+        ref_suf = Path(reference.filename or "bake.png").suffix or ".png"
+        depth_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=depth_suf)
+        ref_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ref_suf)
+        try:
+            depth_data = await depth.read()
+            ref_data = await reference.read()
+            if not depth_data:
+                raise HTTPException(status_code=400, detail="empty depth upload")
+            if not ref_data:
+                raise HTTPException(status_code=400, detail="empty reference upload")
+            depth_tmp.write(depth_data)
+            depth_tmp.close()
+            ref_tmp.write(ref_data)
+            ref_tmp.close()
+            return character_pose_lock_jobs.start_pose_lock(
+                depth_path=Path(depth_tmp.name),
+                reference_path=Path(ref_tmp.name),
+                prompt=prompt,
+                comfy_url=comfy_url or None,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        finally:
+            for tmp in (depth_tmp, ref_tmp):
+                try:
+                    Path(tmp.name).unlink(missing_ok=True)
+                except Exception:  # noqa: BLE001
+                    pass
+
+    @app.get("/api/character/pose-lock/jobs/{job_id}")
+    def character_pose_lock_job(job_id: str) -> dict[str, Any]:
+        job = character_pose_lock_jobs.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="job not found")
+        return job
+
+    @app.get("/api/voice/status")
+    def voice_status() -> dict[str, Any]:
+        return voice_vosk.status()
+
+    @app.post("/api/voice/command")
+    async def voice_command(
+        request: Request,
+        sample_rate: int = 16000,
+        reset: bool = False,
+    ) -> dict[str, Any]:
+        """Accept raw s16le mono PCM; return start|stop|none (local Vosk)."""
+        if reset:
+            voice_vosk.reset_recognizer()
+        body = await request.body()
+        try:
+            return voice_vosk.process_pcm(body, sample_rate=sample_rate)
+        except RuntimeError as e:
+            raise HTTPException(status_code=503, detail=str(e)) from e
+
     portal_dir = WEB_ROOT / "portal"
     timeline_dir = WEB_ROOT / "timeline"
     character_dir = WEB_ROOT / "character"
+    reference_dir = WEB_ROOT / "reference"
     ui_dir = WEB_ROOT / "ui"
 
     @app.get("/")
@@ -252,6 +485,8 @@ def create_app() -> FastAPI:
         return FileResponse(index_path)
 
     character_jobs.ensure_characters_dir()
+    sam3_jobs.ensure_sam3_dir()
+    depth_jobs.ensure_depth_dir()
 
     if ui_dir.is_dir():
         app.mount("/ui", StaticFiles(directory=str(ui_dir)), name="ui")
@@ -269,10 +504,38 @@ def create_app() -> FastAPI:
             StaticFiles(directory=str(character_dir)),
             name="character",
         )
+    if reference_dir.is_dir():
+        app.mount(
+            "/reference-assets",
+            StaticFiles(directory=str(reference_dir)),
+            name="reference",
+        )
     app.mount(
         "/character-outputs",
         StaticFiles(directory=str(character_jobs.CHARACTERS_DIR)),
         name="character_outputs",
+    )
+    app.mount(
+        "/sam3-outputs",
+        StaticFiles(directory=str(sam3_jobs.SAM3_DIR)),
+        name="sam3_outputs",
+    )
+    app.mount(
+        "/depth-outputs",
+        StaticFiles(directory=str(depth_jobs.DEPTH_DIR)),
+        name="depth_outputs",
+    )
+    character_inpaint_jobs.ensure_inpaint_dir()
+    character_pose_lock_jobs.ensure_pose_lock_dir()
+    app.mount(
+        "/inpaint-outputs",
+        StaticFiles(directory=str(character_inpaint_jobs.INPAINT_DIR)),
+        name="inpaint_outputs",
+    )
+    app.mount(
+        "/pose-lock-outputs",
+        StaticFiles(directory=str(character_pose_lock_jobs.POSE_LOCK_DIR)),
+        name="pose_lock_outputs",
     )
 
     return app

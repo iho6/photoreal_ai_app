@@ -181,10 +181,14 @@ def _run_job(job_id: str) -> None:
         _log(job_id, "reprompt: start")
         _log(job_id, f"reprompt: user prompt = {prompt!r}")
 
-        from photoreal.pipelines.vision.reprompt import RepromptPipeline
+        from photoreal.pipelines.vision.reprompt import (
+            CHARACTER_PROMPTS_PATH,
+            RepromptPipeline,
+        )
 
         rewritten = RepromptPipeline().run(
             prompt=prompt,
+            pack_path=CHARACTER_PROMPTS_PATH,
             unload=True,
             log=lambda msg: _log(job_id, msg),
         )

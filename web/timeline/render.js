@@ -250,6 +250,14 @@
     el.dataset.clipId = clip.id;
     el.dataset.trackId = clip.trackId;
     el.dataset.mediaType = clip.mediaType;
+    if (clip.role) el.dataset.role = clip.role;
+    if (
+      clip.role === "reference" &&
+      clip.refSlot != null &&
+      isFinite(Number(clip.refSlot))
+    ) {
+      el.dataset.refSlot = String(Math.floor(Number(clip.refSlot)));
+    }
     el.style.left = clip.start * state.pxPerSec + "px";
     el.style.width = Math.max(4, clip.duration * state.pxPerSec) + "px";
     if (state.selection && state.selection.clipId === clip.id) {
@@ -258,7 +266,16 @@
 
     var badge = document.createElement("span");
     badge.className = "nle-clip__badge";
-    badge.textContent = clip.mediaType;
+    if (clip.role === "reference") {
+      badge.textContent =
+        clip.refSlot != null && isFinite(Number(clip.refSlot))
+          ? "ref" + Math.floor(Number(clip.refSlot))
+          : "ref";
+    } else if (clip.role === "location") {
+      badge.textContent = "loc";
+    } else {
+      badge.textContent = clip.mediaType;
+    }
 
     var label = document.createElement("span");
     label.className = "nle-clip__label";

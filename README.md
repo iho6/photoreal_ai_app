@@ -75,6 +75,52 @@ photoreal reprompt -p "woman in a cafe"          # prints rewritten prompt
 photoreal reprompt -p "studio portrait" --gen    # unload VLM, then photoreal_gen (Comfy up)
 ```
 
+## `sam3_segment`
+
+**SAM 3.1** image segmentation (text and/or points) via ComfyUI’s native `SAM3_Detect` — not a direct Meta git import. Details: [docs/sam3_segment.md](docs/sam3_segment.md).
+
+```bash
+python scripts/download_models.py --sam3
+# Comfy running with comfyui_extra_model_paths.yaml
+photoreal sam3 -i shot.png -p "person" --job image_mask
+photoreal sam3 -i shot.png --positive-coords '[{"x":100,"y":200}]' --job image_rgba
+```
+
+Portal: `POST /api/sam3/segment` (multipart), poll `GET /api/sam3/jobs/{id}`. Outputs: `data/outputs/sam3_segment/`.
+
+## `depth_subject`
+
+Person-only depth still (Depth Anything 3 + SAM mask, feathered backdrop). Timeline: Segment → Convert Depth → Show Depth. Details: [docs/depth_subject.md](docs/depth_subject.md).
+
+```bash
+python scripts/download_models.py --depth
+```
+
+Portal: `POST /api/depth/convert` (multipart image + mask), poll `GET /api/depth/jobs/{id}`. Outputs: `data/outputs/depth_subject/`.
+
+## `character_depth`
+
+Depth map + character reference → Klein render via RefControl depth LoRA. CLI only (not timeline-wired yet). Details: [docs/character_depth.md](docs/character_depth.md).
+
+```bash
+python scripts/download_models.py --photoreal-gen   # once
+python scripts/download_models.py --character-depth
+photoreal character-depth --depth depth.png --reference char.png -p "refcontrol"
+```
+
+## `character_inpaint`
+
+Scene plate + person mask + character reference → scene-lit character bake (Klein masked edit). CLI only; lighting step before later Replace Character. Details: [docs/character_inpaint.md](docs/character_inpaint.md).
+
+```bash
+python scripts/download_models.py --photoreal-gen   # once
+photoreal character-inpaint --scene plate.png --mask mask.png --reference char.png
+```
+
+## Replace Character (timeline)
+
+Right-click clip/preview: **Segment** → **Depth** → **Character Reference** (gallery hover → inpaint) → **Pose Lock** (depth RefControl). Details: [docs/replace_character.md](docs/replace_character.md).
+
 ## Repo layout
 
 | Path | Role |
@@ -84,7 +130,7 @@ photoreal reprompt -p "studio portrait" --gen    # unload VLM, then photoreal_ge
 | `launch.sh` / `launch.bat` | Stage-1 entry (Linux / Windows) |
 | `runtime/` | Pinned ComfyUI + BFL flux2 |
 | `data/` | Models / I/O / logs |
-| `scripts/download_models.py` | `--photoreal-gen`, `--vlm`, `--all`, … |
+| `scripts/download_models.py` | `--photoreal-gen`, `--vlm`, `--sam3`, `--depth`, `--character-depth`, `--all`, … |
 | `docs/` | Architecture + ability docs |
 
 ```bash

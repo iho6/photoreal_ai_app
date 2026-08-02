@@ -11,6 +11,10 @@ Usage (from repo root):
   python scripts/download_models.py --photoreal-gen
   python scripts/download_models.py --photoreal-gen --with-snofs
   python scripts/download_models.py --vlm
+  python scripts/download_models.py --sam3
+  python scripts/download_models.py --depth
+  python scripts/download_models.py --character-depth
+  python scripts/download_models.py --vosk
   python scripts/download_models.py --all
   python scripts/download_models.py --all --loras-only
 """
@@ -20,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import time
 import urllib.error
 import urllib.request
@@ -27,17 +32,49 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-MODELS_ROOT = REPO_ROOT / "data" / "models"
+# Prefer PHOTOREAL_REPO_ROOT (Flash volume sync pod); else repo root from scripts/.
+_REPO_ENV = (os.environ.get("PHOTOREAL_REPO_ROOT") or "").strip()
+REPO_ROOT = Path(_REPO_ENV).resolve() if _REPO_ENV else Path(__file__).resolve().parents[1]
+_MODELS_ENV = (os.environ.get("PHOTOREAL_MODELS_ROOT") or "").strip()
+MODELS_ROOT = (
+    Path(_MODELS_ENV).resolve()
+    if _MODELS_ENV
+    else REPO_ROOT / "data" / "models"
+)
 KLEIN_DIR = MODELS_ROOT / "flux2" / "klein-base-9b"
 LORAS_DIR = MODELS_ROOT / "loras"
 OPTIONAL_LORAS_DIR = LORAS_DIR / "optional"
 
-# Ability ids (CLI flags use dashes: --photoreal-gen, --vlm)
-ABILITIES = ("photoreal_gen", "vlm")
+# Ability ids (CLI flags use dashes: --photoreal-gen, --vlm, --sam3, --depth)
+ABILITIES = ("photoreal_gen", "vlm", "sam3", "depth", "character_depth")
 
 HF_VLM_REPO = "Qwen/Qwen3-VL-8B-Instruct"
 VLM_DIR = MODELS_ROOT / "vlm" / "Qwen3-VL-8B-Instruct"
+
+# Comfy-Org packaged SAM 3.1 multiplex (used by CheckpointLoaderSimple / SAM3_Detect)
+HF_SAM3_REPO = "Comfy-Org/sam3.1"
+HF_SAM3_FILE = "checkpoints/sam3.1_multiplex_fp16.safetensors"
+SAM3_DIR = MODELS_ROOT / "sam3"
+SAM3_CKPT = SAM3_DIR / "sam3.1_multiplex_fp16.safetensors"
+
+# Depth Anything 3 mono large (geometry_estimation folder type)
+HF_DEPTH_REPO = "Comfy-Org/Depth-Anything-3"
+HF_DEPTH_FILE = "geometry_estimation/depth_anything_3_mono_large.safetensors"
+DEPTH_DIR = MODELS_ROOT / "depth_anything3"
+DEPTH_CKPT = DEPTH_DIR / "depth_anything_3_mono_large.safetensors"
+
+# RefControl depth LoRA for character_depth (Klein Base)
+HF_REFCONTROL_DEPTH_REPO = "thedeoxen/refcontrol-FLUX.2-klein-9B-reference-depth-lora"
+HF_REFCONTROL_DEPTH_FILE = "flux2_klein_9b_refcontrol_depth.safetensors"
+REFCONTROL_DEPTH_LORA = LORAS_DIR / HF_REFCONTROL_DEPTH_FILE
+
+# Local Vosk small EN (Record Reference Start/Stop — not an image ability)
+VOSK_MODEL_NAME = "vosk-model-small-en-us-0.15"
+VOSK_ZIP_URL = (
+    f"https://alphacephei.com/vosk/models/{VOSK_MODEL_NAME}.zip"
+)
+VOSK_DIR = MODELS_ROOT / "vosk"
+VOSK_MODEL_DIR = VOSK_DIR / VOSK_MODEL_NAME
 
 # Hugging Face (gated — NC license)
 HF_KLEIN_REPO = "black-forest-labs/FLUX.2-klein-base-9B"
@@ -696,6 +733,14 @@ photoreal_data:
   clip: models/flux2/klein-base-9b/text_encoder/
   loras: models/loras/
   embeddings: models/embeddings/
+
+photoreal_sam3:
+  base_path: {data.as_posix()}/
+  checkpoints: models/sam3/
+
+photoreal_depth:
+  base_path: {data.as_posix()}/
+  geometry_estimation: models/depth_anything3/
 """,
         encoding="utf-8",
     )
@@ -824,10 +869,277 @@ def download_vlm() -> dict:
     return records
 
 
+def download_sam3() -> dict:
+    """Download SAM 3.1 multiplex checkpoint for Comfy SAM3_Detect."""
+    try:
+        from huggingface_hub import hf_hub_download
+
+        tqdm_cls = _enable_portal_hf_progress()
+    except ImportError as e:
+        raise SystemExit(
+            "huggingface_hub is required. pip install huggingface_hub"
+        ) from e
+
+    print(f"=== sam3: {HF_SAM3_REPO} / {HF_SAM3_FILE} ===")
+    SAM3_DIR.mkdir(parents=True, exist_ok=True)
+    token = _hf_token()
+    if SAM3_CKPT.is_file() and SAM3_CKPT.stat().st_size >= 50_000_000:
+        print(
+            f"  skip (exists, size ok): {SAM3_CKPT.name} "
+            f"({SAM3_CKPT.stat().st_size} bytes)"
+        )
+        records = {
+            "ability": "sam3",
+            "downloaded_at": datetime.now(timezone.utc).isoformat(),
+            "repo": HF_SAM3_REPO,
+            "file": HF_SAM3_FILE,
+            "path": str(SAM3_CKPT.resolve().relative_to(REPO_ROOT)),
+            "bytes": SAM3_CKPT.stat().st_size,
+            "skipped": True,
+            "notes": [
+                "Comfy-native SAM 3.1 multiplex checkpoint for sam3_segment.",
+                "Accept model terms on Hugging Face if the download is gated.",
+            ],
+        }
+    else:
+        print("  downloading SAM 3.1 multiplex checkpoint…")
+        downloaded = Path(
+            hf_hub_download(
+                repo_id=HF_SAM3_REPO,
+                filename=HF_SAM3_FILE,
+                local_dir=str(SAM3_DIR),
+                token=token,
+                tqdm_class=tqdm_cls,
+            )
+        )
+        # hf may nest under local_dir/checkpoints/; normalize to flat SAM3_CKPT
+        if downloaded.resolve() != SAM3_CKPT.resolve() and downloaded.is_file():
+            SAM3_CKPT.parent.mkdir(parents=True, exist_ok=True)
+            if SAM3_CKPT.exists():
+                SAM3_CKPT.unlink()
+            shutil.move(str(downloaded), str(SAM3_CKPT))
+        print(f"  SAM3 -> {SAM3_CKPT} ({SAM3_CKPT.stat().st_size} bytes)")
+        records = {
+            "ability": "sam3",
+            "downloaded_at": datetime.now(timezone.utc).isoformat(),
+            "repo": HF_SAM3_REPO,
+            "file": HF_SAM3_FILE,
+            "path": str(SAM3_CKPT.resolve().relative_to(REPO_ROOT)),
+            "bytes": SAM3_CKPT.stat().st_size,
+            "skipped": False,
+            "notes": [
+                "Comfy-native SAM 3.1 multiplex checkpoint for sam3_segment.",
+                "Accept model terms on Hugging Face if the download is gated.",
+            ],
+        }
+
+    manifest = MODELS_ROOT / "sam3_manifest.json"
+    manifest.write_text(json.dumps(records, indent=2), encoding="utf-8")
+    print(f"Wrote manifest {manifest}")
+    return records
+
+
+def download_depth() -> dict:
+    """Download Depth Anything 3 mono large for depth_subject."""
+    try:
+        from huggingface_hub import hf_hub_download
+
+        tqdm_cls = _enable_portal_hf_progress()
+    except ImportError as e:
+        raise SystemExit(
+            "huggingface_hub is required. pip install huggingface_hub"
+        ) from e
+
+    print(f"=== depth: {HF_DEPTH_REPO} / {HF_DEPTH_FILE} ===")
+    DEPTH_DIR.mkdir(parents=True, exist_ok=True)
+    token = _hf_token()
+    if DEPTH_CKPT.is_file() and DEPTH_CKPT.stat().st_size >= 50_000_000:
+        print(
+            f"  skip (exists, size ok): {DEPTH_CKPT.name} "
+            f"({DEPTH_CKPT.stat().st_size} bytes)"
+        )
+        records = {
+            "ability": "depth",
+            "downloaded_at": datetime.now(timezone.utc).isoformat(),
+            "repo": HF_DEPTH_REPO,
+            "file": HF_DEPTH_FILE,
+            "path": str(DEPTH_CKPT.resolve().relative_to(REPO_ROOT)),
+            "bytes": DEPTH_CKPT.stat().st_size,
+            "skipped": True,
+            "notes": [
+                "Comfy-native Depth Anything 3 mono large for depth_subject.",
+            ],
+        }
+    else:
+        print("  downloading Depth Anything 3 mono large…")
+        downloaded = Path(
+            hf_hub_download(
+                repo_id=HF_DEPTH_REPO,
+                filename=HF_DEPTH_FILE,
+                local_dir=str(DEPTH_DIR),
+                token=token,
+                tqdm_class=tqdm_cls,
+            )
+        )
+        if downloaded.resolve() != DEPTH_CKPT.resolve() and downloaded.is_file():
+            DEPTH_CKPT.parent.mkdir(parents=True, exist_ok=True)
+            if DEPTH_CKPT.exists():
+                DEPTH_CKPT.unlink()
+            shutil.move(str(downloaded), str(DEPTH_CKPT))
+        print(f"  Depth -> {DEPTH_CKPT} ({DEPTH_CKPT.stat().st_size} bytes)")
+        records = {
+            "ability": "depth",
+            "downloaded_at": datetime.now(timezone.utc).isoformat(),
+            "repo": HF_DEPTH_REPO,
+            "file": HF_DEPTH_FILE,
+            "path": str(DEPTH_CKPT.resolve().relative_to(REPO_ROOT)),
+            "bytes": DEPTH_CKPT.stat().st_size,
+            "skipped": False,
+            "notes": [
+                "Comfy-native Depth Anything 3 mono large for depth_subject.",
+            ],
+        }
+
+    _write_local_comfy_paths()
+    manifest = MODELS_ROOT / "depth_manifest.json"
+    manifest.write_text(json.dumps(records, indent=2), encoding="utf-8")
+    print(f"Wrote manifest {manifest}")
+    return records
+
+
+def download_character_depth() -> dict:
+    """Download RefControl depth LoRA for character_depth (Klein Base)."""
+    try:
+        from huggingface_hub import hf_hub_download
+
+        tqdm_cls = _enable_portal_hf_progress()
+    except ImportError as e:
+        raise SystemExit(
+            "huggingface_hub is required. pip install huggingface_hub"
+        ) from e
+
+    print(
+        f"=== character_depth: {HF_REFCONTROL_DEPTH_REPO} / "
+        f"{HF_REFCONTROL_DEPTH_FILE} ==="
+    )
+    LORAS_DIR.mkdir(parents=True, exist_ok=True)
+    token = _hf_token()
+    if (
+        REFCONTROL_DEPTH_LORA.is_file()
+        and REFCONTROL_DEPTH_LORA.stat().st_size >= 1_000_000
+    ):
+        print(
+            f"  skip (exists, size ok): {REFCONTROL_DEPTH_LORA.name} "
+            f"({REFCONTROL_DEPTH_LORA.stat().st_size} bytes)"
+        )
+        records = {
+            "ability": "character_depth",
+            "downloaded_at": datetime.now(timezone.utc).isoformat(),
+            "repo": HF_REFCONTROL_DEPTH_REPO,
+            "file": HF_REFCONTROL_DEPTH_FILE,
+            "path": str(REFCONTROL_DEPTH_LORA.resolve().relative_to(REPO_ROOT)),
+            "bytes": REFCONTROL_DEPTH_LORA.stat().st_size,
+            "skipped": True,
+            "notes": [
+                "RefControl depth LoRA for character_depth.",
+                "Requires Klein Base + Lenovo/Mrpopo from --photoreal-gen.",
+            ],
+        }
+    else:
+        print("  downloading RefControl depth LoRA…")
+        downloaded = Path(
+            hf_hub_download(
+                repo_id=HF_REFCONTROL_DEPTH_REPO,
+                filename=HF_REFCONTROL_DEPTH_FILE,
+                local_dir=str(LORAS_DIR),
+                token=token,
+                tqdm_class=tqdm_cls,
+            )
+        )
+        if (
+            downloaded.resolve() != REFCONTROL_DEPTH_LORA.resolve()
+            and downloaded.is_file()
+        ):
+            if REFCONTROL_DEPTH_LORA.exists():
+                REFCONTROL_DEPTH_LORA.unlink()
+            shutil.move(str(downloaded), str(REFCONTROL_DEPTH_LORA))
+        print(
+            f"  RefControl depth -> {REFCONTROL_DEPTH_LORA} "
+            f"({REFCONTROL_DEPTH_LORA.stat().st_size} bytes)"
+        )
+        records = {
+            "ability": "character_depth",
+            "downloaded_at": datetime.now(timezone.utc).isoformat(),
+            "repo": HF_REFCONTROL_DEPTH_REPO,
+            "file": HF_REFCONTROL_DEPTH_FILE,
+            "path": str(REFCONTROL_DEPTH_LORA.resolve().relative_to(REPO_ROOT)),
+            "bytes": REFCONTROL_DEPTH_LORA.stat().st_size,
+            "skipped": False,
+            "notes": [
+                "RefControl depth LoRA for character_depth.",
+                "Requires Klein Base + Lenovo/Mrpopo from --photoreal-gen.",
+            ],
+        }
+
+    _write_local_comfy_paths()
+    manifest = MODELS_ROOT / "character_depth_manifest.json"
+    manifest.write_text(json.dumps(records, indent=2), encoding="utf-8")
+    print(f"Wrote manifest {manifest}")
+    return records
+
+
+def download_vosk() -> dict:
+    """Download + unpack Vosk small English model for local voice commands."""
+    import io
+    import zipfile
+
+    print(f"=== vosk: {VOSK_MODEL_NAME} ===")
+    VOSK_DIR.mkdir(parents=True, exist_ok=True)
+    if VOSK_MODEL_DIR.is_dir() and any(VOSK_MODEL_DIR.iterdir()):
+        print(f"  skip (exists): {VOSK_MODEL_DIR}")
+        records = {
+            "ability": "vosk",
+            "downloaded_at": datetime.now(timezone.utc).isoformat(),
+            "url": VOSK_ZIP_URL,
+            "path": str(VOSK_MODEL_DIR.resolve().relative_to(REPO_ROOT)),
+            "skipped": True,
+        }
+    else:
+        print(f"  downloading {VOSK_ZIP_URL}…")
+        req = urllib.request.Request(
+            VOSK_ZIP_URL, headers={"User-Agent": "photoreal-download_models"}
+        )
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            blob = resp.read()
+        print(f"  unpacking ({len(blob)} bytes)…")
+        with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+            zf.extractall(VOSK_DIR)
+        if not VOSK_MODEL_DIR.is_dir():
+            raise RuntimeError(
+                f"Vosk unpack did not create {VOSK_MODEL_DIR}; "
+                f"contents: {list(VOSK_DIR.iterdir())[:10]}"
+            )
+        print(f"  Vosk -> {VOSK_MODEL_DIR}")
+        records = {
+            "ability": "vosk",
+            "downloaded_at": datetime.now(timezone.utc).isoformat(),
+            "url": VOSK_ZIP_URL,
+            "path": str(VOSK_MODEL_DIR.resolve().relative_to(REPO_ROOT)),
+            "skipped": False,
+        }
+    manifest = MODELS_ROOT / "vosk_manifest.json"
+    manifest.write_text(json.dumps(records, indent=2), encoding="utf-8")
+    print(f"Wrote manifest {manifest}")
+    return records
+
+
 # Register ability download callables here as new abilities are added.
 ABILITY_DOWNLOADERS = {
     "photoreal_gen": download_photoreal_gen,
     "vlm": download_vlm,
+    "sam3": download_sam3,
+    "depth": download_depth,
+    "character_depth": download_character_depth,
 }
 
 
@@ -839,6 +1151,10 @@ def build_parser() -> argparse.ArgumentParser:
             "Abilities:\n"
             "  --photoreal-gen   FLUX.2 Klein 9B Base + Lenovo + Mrpopo LoRAs\n"
             "  --vlm             Qwen3-VL-8B-Instruct (multimodal)\n"
+            "  --sam3            SAM 3.1 multiplex checkpoint (Comfy SAM3_Detect)\n"
+            "  --depth           Depth Anything 3 mono large (depth_subject)\n"
+            "  --character-depth RefControl depth LoRA (character_depth)\n"
+            "  --vosk            Vosk small EN (local Record Reference Start/Stop)\n"
             "  --all             Every registered ability\n"
         ),
     )
@@ -854,9 +1170,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Download Qwen3-VL-8B-Instruct for vlm / reprompt",
     )
     ability.add_argument(
+        "--sam3",
+        action="store_true",
+        help="Download SAM 3.1 multiplex checkpoint for sam3_segment",
+    )
+    ability.add_argument(
+        "--depth",
+        action="store_true",
+        help="Download Depth Anything 3 for depth_subject",
+    )
+    ability.add_argument(
+        "--character-depth",
+        action="store_true",
+        help="Download RefControl depth LoRA for character_depth",
+    )
+    ability.add_argument(
         "--all",
         action="store_true",
         help="Download models for all abilities",
+    )
+    ability.add_argument(
+        "--vosk",
+        action="store_true",
+        help="Download Vosk small English model for local voice commands",
     )
 
     opts = parser.add_argument_group("options")
@@ -886,6 +1222,12 @@ def selected_abilities(args: argparse.Namespace) -> list[str]:
         chosen.append("photoreal_gen")
     if args.vlm:
         chosen.append("vlm")
+    if args.sam3:
+        chosen.append("sam3")
+    if args.depth:
+        chosen.append("depth")
+    if args.character_depth:
+        chosen.append("character_depth")
     return chosen
 
 
@@ -893,15 +1235,20 @@ def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
     chosen = selected_abilities(args)
-    if not chosen:
+    if not chosen and not args.vosk:
         parser.error(
-            "Select at least one ability flag (e.g. --photoreal-gen, --vlm) or --all"
+            "Select at least one ability flag "
+            "(e.g. --photoreal-gen, --vlm, --sam3, --depth, --character-depth, "
+            "--vosk) or --all"
         )
     if args.loras_only and args.hf_only:
         parser.error("Use only one of --loras-only / --hf-only")
 
     MODELS_ROOT.mkdir(parents=True, exist_ok=True)
-    print(f"Downloading for abilities: {', '.join(chosen)}")
+    if chosen:
+        print(f"Downloading for abilities: {', '.join(chosen)}")
+    if args.vosk:
+        print("Downloading vosk voice model…")
 
     for ability_id in chosen:
         fn = ABILITY_DOWNLOADERS[ability_id]
@@ -913,6 +1260,8 @@ def main(argv: list[str] | None = None) -> None:
             )
         else:
             fn()
+    if args.vosk:
+        download_vosk()
 
     print("Done.")
 

@@ -114,12 +114,16 @@ def test_download_models_cli_flags() -> None:
         "photoreal_gen"
     ]
     assert mod.selected_abilities(mod.build_parser().parse_args(["--vlm"])) == ["vlm"]
+    assert mod.selected_abilities(mod.build_parser().parse_args(["--sam3"])) == ["sam3"]
     assert mod.selected_abilities(mod.build_parser().parse_args(["--all"])) == [
         "photoreal_gen",
         "vlm",
+        "sam3",
     ]
     assert "vlm" in mod.ABILITY_DOWNLOADERS
+    assert "sam3" in mod.ABILITY_DOWNLOADERS
     assert mod.HF_VLM_REPO == "Qwen/Qwen3-VL-8B-Instruct"
+    assert mod.HF_SAM3_REPO == "Comfy-Org/sam3.1"
 
     with pytest.raises(SystemExit):
         mod.main([])

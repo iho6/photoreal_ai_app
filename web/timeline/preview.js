@@ -9,6 +9,9 @@
     placeholder.className = "tl-preview__placeholder";
     placeholder.textContent = "Preview";
 
+    var stage = document.createElement("div");
+    stage.className = "tl-preview__stage";
+
     var video = document.createElement("video");
     video.className = "tl-preview__video";
     video.playsInline = true;
@@ -19,9 +22,10 @@
     img.className = "tl-preview__img";
     img.alt = "";
 
+    stage.appendChild(video);
+    stage.appendChild(img);
     previewEl.appendChild(placeholder);
-    previewEl.appendChild(video);
-    previewEl.appendChild(img);
+    previewEl.appendChild(stage);
 
     var audioPool = {};
     var lastPictureId = null;
@@ -31,10 +35,29 @@
     var stateRef = null;
     var onTick = null;
 
+    function applyRefFraming(clip) {
+      var isRef =
+        !!clip &&
+        (clip.role === "reference" ||
+          !!clip.aspect ||
+          clip.mirror != null);
+      if (!isRef) {
+        stage.removeAttribute("data-ref");
+        stage.removeAttribute("data-aspect");
+        stage.removeAttribute("data-mirror");
+        return;
+      }
+      stage.dataset.ref = "true";
+      stage.dataset.aspect = clip.aspect || "16:9";
+      stage.dataset.mirror = clip.mirror !== false ? "true" : "false";
+    }
+
     function showPlaceholder() {
       placeholder.hidden = false;
+      stage.hidden = true;
       video.hidden = true;
       img.hidden = true;
+      applyRefFraming(null);
       try {
         video.pause();
       } catch (_) {}
@@ -69,7 +92,53 @@
         return;
       }
       placeholder.hidden = true;
+      stage.hidden = false;
+      applyRefFraming(clip);
       var localT = state.playhead - clip.start + clip.inPoint;
+
+      if (clip.showPoseLock && clip.poseLockUrl) {
+        video.hidden = true;
+        try {
+          video.pause();
+        } catch (_) {}
+        img.hidden = false;
+        if (img.src !== clip.poseLockUrl) img.src = clip.poseLockUrl;
+        lastPictureId = clip.id + ":poseLock";
+        return;
+      }
+
+      if (clip.showInpaint && clip.inpaintUrl) {
+        video.hidden = true;
+        try {
+          video.pause();
+        } catch (_) {}
+        img.hidden = false;
+        if (img.src !== clip.inpaintUrl) img.src = clip.inpaintUrl;
+        lastPictureId = clip.id + ":inpaint";
+        return;
+      }
+
+      if (clip.showDepth && clip.depthUrl) {
+        video.hidden = true;
+        try {
+          video.pause();
+        } catch (_) {}
+        img.hidden = false;
+        if (img.src !== clip.depthUrl) img.src = clip.depthUrl;
+        lastPictureId = clip.id + ":depth";
+        return;
+      }
+
+      if (clip.showSegment && clip.segmentCutoutUrl) {
+        video.hidden = true;
+        try {
+          video.pause();
+        } catch (_) {}
+        img.hidden = false;
+        if (img.src !== clip.segmentCutoutUrl) img.src = clip.segmentCutoutUrl;
+        lastPictureId = clip.id + ":segment";
+        return;
+      }
 
       if (clip.mediaType === "image") {
         video.hidden = true;

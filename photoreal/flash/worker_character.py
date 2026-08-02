@@ -117,10 +117,18 @@ def character_generate_impl(prompt: str) -> dict[str, Any]:
     settings = get_settings()
     log(f"worker: settings.data_root={settings.data_root}")
 
-    from photoreal.pipelines.vision.reprompt import RepromptPipeline
+    from photoreal.pipelines.vision.reprompt import (
+        CHARACTER_PROMPTS_PATH,
+        RepromptPipeline,
+    )
 
     log("reprompt: start")
-    rewritten = RepromptPipeline().run(prompt=text, unload=True, log=log)
+    rewritten = RepromptPipeline().run(
+        prompt=text,
+        pack_path=CHARACTER_PROMPTS_PATH,
+        unload=True,
+        log=log,
+    )
     log(f"reprompt: rewritten={rewritten[:500]!r}")
 
     comfy_url = _ensure_comfy(log)

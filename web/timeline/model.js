@@ -22,6 +22,26 @@
       duration: c.duration,
       inPoint: c.inPoint,
       sourceDuration: c.sourceDuration,
+      role: c.role || null,
+      refSlot:
+        c.refSlot == null || !isFinite(Number(c.refSlot))
+          ? null
+          : Math.max(1, Math.floor(Number(c.refSlot))),
+      aspect: c.aspect || null,
+      mirror: c.mirror == null ? null : !!c.mirror,
+      segmentMaskUrl: c.segmentMaskUrl || null,
+      segmentFrameUrl: c.segmentFrameUrl || null,
+      segmentCutoutUrl: c.segmentCutoutUrl || null,
+      segmentLocalTime:
+        c.segmentLocalTime == null ? null : Number(c.segmentLocalTime),
+      showSegment: !!c.showSegment,
+      depthUrl: c.depthUrl || null,
+      showDepth: !!c.showDepth,
+      inpaintUrl: c.inpaintUrl || null,
+      showInpaint: !!c.showInpaint,
+      backdropClipId: c.backdropClipId || null,
+      poseLockUrl: c.poseLockUrl || null,
+      showPoseLock: !!c.showPoseLock,
     };
   }
 
@@ -150,12 +170,12 @@
     });
   }
 
-  function addTrack(state) {
+  function addTrack(state, name) {
     pushUndo(state);
     var n = state.tracks.length + 1;
     var track = {
       id: uid("trk"),
-      name: "Track " + n,
+      name: name || "Track " + n,
       locked: false,
       hidden: false,
       height: 64,
@@ -163,6 +183,245 @@
     state.tracks.push(track);
     emit(state);
     return track;
+  }
+
+  function findReferencesTrack(state) {
+    for (var i = 0; i < state.tracks.length; i++) {
+      if (state.tracks[i].name === "References") return state.tracks[i];
+    }
+    return null;
+  }
+
+  function ensureReferencesTrack(state) {
+    var existing = findReferencesTrack(state);
+    if (existing) return existing;
+    return addTrack(state, "References");
+  }
+
+  function findLocationsTrack(state) {
+    for (var i = 0; i < state.tracks.length; i++) {
+      if (state.tracks[i].name === "Locations") return state.tracks[i];
+    }
+    return null;
+  }
+
+  function ensureLocationsTrack(state) {
+    var existing = findLocationsTrack(state);
+    if (existing) return existing;
+    return addTrack(state, "Locations");
+  }
+
+  function probeMediaDuration(file, mediaType) {
+    return new Promise(function (resolve) {
+      if (mediaType === "image") {
+        resolve(IMAGE_DEFAULT_DURATION);
+        return;
+      }
+      var url = URL.createObjectURL(file);
+      var el = document.createElement(mediaType === "audio" ? "audio" : "video");
+      el.preload = "metadata";
+      var done = false;
+      function finish(d) {
+        if (done) return;
+        done = true;
+        try {
+          URL.revokeObjectURL(url);
+        } catch (_) {}
+        var v = Number(d);
+        if (!isFinite(v) || v <= 0) v = IMAGE_DEFAULT_DURATION;
+        resolve(Math.max(MIN_CLIP_DURATION, v));
+      }
+      function tryFinishFromEl() {
+        var d = el.duration;
+        if (isFinite(d) && d > 0) {
+          finish(d);
+          return true;
+        }
+        return false;
+      }
+      el.onloadedmetadata = function () {
+        if (tryFinishFromEl()) return;
+        // Chrome WebM from MediaRecorder often reports Infinity until seek.
+        try {
+          el.currentTime = 1e8;
+        } catch (_) {
+          finish(IMAGE_DEFAULT_DURATION);
+        }
+      };
+      el.ondurationchange = function () {
+        tryFinishFromEl();
+      };
+      el.onseeked = function () {
+        if (tryFinishFromEl()) return;
+        finish(IMAGE_DEFAULT_DURATION);
+      };
+      el.onerror = function () {
+        finish(IMAGE_DEFAULT_DURATION);
+      };
+      setTimeout(function () {
+        finish(el.duration);
+      }, 2000);
+      el.src = url;
+    });
+  }
+
+  function nextRefSlot(state) {
+    var max = 0;
+    for (var i = 0; i < state.clips.length; i++) {
+      var c = state.clips[i];
+      if (!c || c.role !== "reference") continue;
+      var n = Number(c.refSlot);
+      if (isFinite(n) && n > max) max = Math.floor(n);
+    }
+    return max + 1;
+  }
+
+  function addReferenceClip(state, blob, meta) {
+    meta = meta || {};
+    if (!blob) {
+      return Promise.reject(new Error("No recording blob to save"));
+    }
+    var file = new File(
+      [blob],
+      meta.name || "reference.webm",
+      { type: blob.type || "video/webm" }
+    );
+    var hinted = Number(meta.duration);
+    var durPromise =
+      isFinite(hinted) && hinted > 0
+        ? Promise.resolve(Math.max(MIN_CLIP_DURATION, hinted))
+        : probeMediaDuration(file, "video");
+
+    return durPromise.then(function (dur) {
+      pushUndo(state);
+      var track = findReferencesTrack(state);
+      if (!track) {
+        track = {
+          id: uid("trk"),
+          name: "References",
+          locked: false,
+          hidden: false,
+          height: 64,
+        };
+        state.tracks.push(track);
+      }
+      if (track.locked) {
+        emit(state);
+        return null;
+      }
+      var srcDur = Number(meta.sourceDuration);
+      if (!isFinite(srcDur) || srcDur <= 0) srcDur = dur;
+      var inPt = Number(meta.inPoint);
+      if (!isFinite(inPt) || inPt < 0) inPt = 0;
+      if (inPt > srcDur - MIN_CLIP_DURATION) {
+        inPt = Math.max(0, srcDur - MIN_CLIP_DURATION);
+      }
+      var clipDur = Math.max(MIN_CLIP_DURATION, dur);
+      if (inPt + clipDur > srcDur) {
+        clipDur = Math.max(MIN_CLIP_DURATION, srcDur - inPt);
+      }
+      var metaSlot = Number(meta.refSlot);
+      var refSlot =
+        isFinite(metaSlot) && metaSlot >= 1
+          ? Math.floor(metaSlot)
+          : nextRefSlot(state);
+      var clip = {
+        id: uid("clip"),
+        trackId: track.id,
+        name: meta.name || "Reference " + refSlot,
+        mediaType: "video",
+        src: URL.createObjectURL(blob),
+        start: Math.max(0, state.playhead),
+        duration: clipDur,
+        inPoint: inPt,
+        sourceDuration: srcDur,
+        role: "reference",
+        refSlot: refSlot,
+        aspect: meta.aspect || "16:9",
+        mirror: meta.mirror !== false,
+      };
+      state.clips.push(clip);
+      state.selection = { trackId: clip.trackId, clipId: clip.id };
+      emit(state);
+      return clip;
+    });
+  }
+
+  /**
+   * Add image file(s) as location/backdrop plates (role=location) on Locations track.
+   */
+  function addLocationClipsFromFiles(state, files, atTime) {
+    var list = Array.prototype.slice.call(files || []);
+    var jobs = [];
+    for (var i = 0; i < list.length; i++) {
+      var file = list[i];
+      var mt = mediaTypeFromFile(file);
+      if (mt !== "image") continue;
+      jobs.push(
+        (function (f) {
+          return probeMediaDuration(f, "image").then(function (dur) {
+            return {
+              file: f,
+              sourceDuration: dur,
+              src: URL.createObjectURL(f),
+              name: f.name || "location",
+            };
+          });
+        })(file)
+      );
+    }
+    if (!jobs.length) {
+      return Promise.reject(
+        new Error("Create Location needs an image file (PNG/JPEG/WebP/…)")
+      );
+    }
+
+    return Promise.all(jobs).then(function (items) {
+      pushUndo(state);
+      var track = findLocationsTrack(state);
+      if (!track) {
+        track = {
+          id: uid("trk"),
+          name: "Locations",
+          locked: false,
+          hidden: false,
+          height: 64,
+        };
+        state.tracks.push(track);
+      }
+      if (track.locked) {
+        emit(state);
+        return [];
+      }
+      var t = Math.max(0, atTime == null ? state.playhead : atTime);
+      var created = [];
+      for (var j = 0; j < items.length; j++) {
+        var it = items[j];
+        var clip = {
+          id: uid("clip"),
+          trackId: track.id,
+          name: it.name,
+          mediaType: "image",
+          src: it.src,
+          start: t,
+          duration: it.sourceDuration,
+          inPoint: 0,
+          sourceDuration: it.sourceDuration,
+          role: "location",
+        };
+        state.clips.push(clip);
+        created.push(clip);
+        t += it.sourceDuration;
+      }
+      if (created.length) {
+        state.selection = {
+          trackId: created[0].trackId,
+          clipId: created[0].id,
+        };
+      }
+      emit(state);
+      return created;
+    });
   }
 
   function setPlayhead(state, t, opts) {
@@ -202,35 +461,6 @@
     if (/\.(mp3|wav|ogg|m4a|aac|flac)$/.test(name)) return "audio";
     if (/\.(png|jpe?g|gif|webp|bmp|svg)$/.test(name)) return "image";
     return null;
-  }
-
-  function probeMediaDuration(file, mediaType) {
-    return new Promise(function (resolve) {
-      if (mediaType === "image") {
-        resolve(IMAGE_DEFAULT_DURATION);
-        return;
-      }
-      var url = URL.createObjectURL(file);
-      var el = document.createElement(mediaType === "audio" ? "audio" : "video");
-      el.preload = "metadata";
-      var done = false;
-      function finish(d) {
-        if (done) return;
-        done = true;
-        URL.revokeObjectURL(url);
-        resolve(Math.max(MIN_CLIP_DURATION, d || IMAGE_DEFAULT_DURATION));
-      }
-      el.onloadedmetadata = function () {
-        finish(el.duration);
-      };
-      el.onerror = function () {
-        finish(IMAGE_DEFAULT_DURATION);
-      };
-      setTimeout(function () {
-        finish(el.duration || IMAGE_DEFAULT_DURATION);
-      }, 4000);
-      el.src = url;
-    });
   }
 
   function addClipsFromFiles(state, trackId, files, atTime) {
@@ -275,6 +505,7 @@
           duration: it.sourceDuration,
           inPoint: 0,
           sourceDuration: it.sourceDuration,
+          role: null,
         };
         state.clips.push(clip);
         created.push(clip);
@@ -454,6 +685,52 @@
     return null;
   }
 
+  function clipsOverlappingAt(state, t) {
+    var out = [];
+    for (var i = 0; i < state.tracks.length; i++) {
+      var track = state.tracks[i];
+      if (track.hidden) continue;
+      var on = clipsOnTrack(state, track.id);
+      for (var j = 0; j < on.length; j++) {
+        var c = on[j];
+        if (c.mediaType === "audio") continue;
+        if (t >= c.start && t < c.start + c.duration) out.push(c);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Backdrop for Character Reference inpaint: overlapping role=location clip.
+   * Among matches, prefer images and take the last track (bottommost).
+   */
+  function findBackdropClip(state, refClip, t) {
+    var candidates = clipsOverlappingAt(state, t).filter(function (c) {
+      if (!c || !refClip) return false;
+      if (c.id === refClip.id) return false;
+      return c.role === "location";
+    });
+    if (!candidates.length) return null;
+
+    var images = candidates.filter(function (c) {
+      return c.mediaType === "image";
+    });
+    var pool = images.length ? images : candidates;
+
+    var trackIndex = {};
+    for (var i = 0; i < state.tracks.length; i++) {
+      trackIndex[state.tracks[i].id] = i;
+    }
+    pool.sort(function (a, b) {
+      var ia = trackIndex[a.trackId];
+      var ib = trackIndex[b.trackId];
+      if (ia == null) ia = -1;
+      if (ib == null) ib = -1;
+      return ia - ib;
+    });
+    return pool[pool.length - 1] || null;
+  }
+
   function audioClipsAt(state, t) {
     var out = [];
     for (var i = 0; i < state.clips.length; i++) {
@@ -500,6 +777,11 @@
     findClip: findClip,
     clipsOnTrack: clipsOnTrack,
     addTrack: addTrack,
+    ensureReferencesTrack: ensureReferencesTrack,
+    ensureLocationsTrack: ensureLocationsTrack,
+    addReferenceClip: addReferenceClip,
+    nextRefSlot: nextRefSlot,
+    addLocationClipsFromFiles: addLocationClipsFromFiles,
     setPlayhead: setPlayhead,
     setPxPerSec: setPxPerSec,
     setSnap: setSnap,
@@ -515,6 +797,8 @@
     toggleHidden: toggleHidden,
     deleteTrack: deleteTrack,
     pictureClipAt: pictureClipAt,
+    clipsOverlappingAt: clipsOverlappingAt,
+    findBackdropClip: findBackdropClip,
     audioClipsAt: audioClipsAt,
     formatTime: formatTime,
     pushUndo: pushUndo,

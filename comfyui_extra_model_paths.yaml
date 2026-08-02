@@ -13,3 +13,13 @@ photoreal_data:
   clip: models/flux2/klein-base-9b/text_encoder/
   loras: models/loras/
   embeddings: models/embeddings/
+
+# SAM 3.1 multiplex checkpoint (sam3_segment ability)
+photoreal_sam3:
+  base_path: data/
+  checkpoints: models/sam3/
+
+# Depth Anything 3 (depth_subject ability)
+photoreal_depth:
+  base_path: data/
+  geometry_estimation: models/depth_anything3/

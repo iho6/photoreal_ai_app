@@ -138,8 +138,71 @@
     load("/character-assets/character.js?v=log-select");
   }
 
+  function ensureReferenceScripts(cb) {
+    var src = "/reference-assets/record_reference.js?v=rr9";
+    if (
+      window.PhotorealRecordReference &&
+      typeof window.PhotorealRecordReference.openModal === "function" &&
+      window.PhotorealRecordReference.version === "rr9"
+    ) {
+      cb();
+      return;
+    }
+    // Drop stale script so Stop→preview fixes actually load.
+    var stale = document.querySelectorAll(
+      'script[src^="/reference-assets/record_reference.js"]'
+    );
+    for (var i = 0; i < stale.length; i++) {
+      stale[i].parentNode.removeChild(stale[i]);
+    }
+    window.PhotorealRecordReference = null;
+    var s = document.createElement("script");
+    s.src = src;
+    s.onload = function () {
+      cb();
+    };
+    s.onerror = function () {
+      window.alert(
+        "Record Reference failed to load. Restart the portal and hard-refresh."
+      );
+    };
+    document.body.appendChild(s);
+  }
+
+  var state = M.createState();
+  var editor = R.createEditorDom(UI);
+  var previewCtl = P.createPreview(preview);
+
+  var locationFileInput = document.createElement("input");
+  locationFileInput.type = "file";
+  locationFileInput.accept = "image/*";
+  locationFileInput.multiple = true;
+  locationFileInput.hidden = true;
+  locationFileInput.addEventListener("change", function () {
+    var files = locationFileInput.files;
+    if (!files || !files.length) return;
+    M.addLocationClipsFromFiles(state, files, state.playhead)
+      .then(function (created) {
+        if (!created || !created.length) {
+          window.alert(
+            "Could not add location clip (Locations track may be locked)."
+          );
+        }
+      })
+      .catch(function (e) {
+        window.alert("Could not add location: " + (e.message || e));
+      });
+    locationFileInput.value = "";
+  });
+  app.appendChild(locationFileInput);
+
   [
-    { label: "Create Location", onClick: function () {} },
+    {
+      label: "Create Location",
+      onClick: function () {
+        locationFileInput.click();
+      },
+    },
     {
       label: "Create Character",
       onClick: function () {
@@ -152,7 +215,34 @@
         });
       },
     },
-    { label: "Record Reference", onClick: function () {} },
+    {
+      label: "Record Reference",
+      onClick: function () {
+        ensureReferenceScripts(function () {
+          try {
+            window.PhotorealRecordReference.openModal({
+              onSave: function (blob, meta) {
+                M.addReferenceClip(state, blob, meta)
+                  .then(function (clip) {
+                    if (!clip) {
+                      window.alert(
+                        "Could not add reference clip (References track may be locked)."
+                      );
+                    }
+                  })
+                  .catch(function (e) {
+                    window.alert(
+                      "Could not add reference clip: " + (e.message || e)
+                    );
+                  });
+              },
+            });
+          } catch (e) {
+            window.alert("Could not open Record Reference: " + (e.message || e));
+          }
+        });
+      },
+    },
   ].forEach(function (spec) {
     actions.appendChild(
       UI.createButton({
@@ -161,10 +251,6 @@
       })
     );
   });
-
-  var state = M.createState();
-  var editor = R.createEditorDom(UI);
-  var previewCtl = P.createPreview(preview);
 
   app.appendChild(previewWrap);
   app.appendChild(actions);

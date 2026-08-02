@@ -44,6 +44,12 @@ flowchart TB
 - Backend/model names live inside the pipeline implementation, not in folder names.
 - New ability = one file under `pipelines/<domain>/` (+ optional `workers/<name>.py`).
 
-## First ability
+## Abilities
 
 - **`photoreal_gen`** — Klein 9B Base + LoRAs via unmodified `runtime/comfyui`. See [photoreal_gen.md](photoreal_gen.md).
+- **`vlm` / `reprompt`** — Qwen3-VL. See [vlm.md](vlm.md).
+- **`sam3_segment`** — SAM 3.1 image masks via Comfy `SAM3_Detect`. See [sam3_segment.md](sam3_segment.md).
+- **`depth_subject`** — Depth Anything 3 + SAM mask composite (person-only depth). See [depth_subject.md](depth_subject.md).
+- **`character_depth`** — Depth map + character reference via RefControl depth LoRA (CLI only for now). See [character_depth.md](character_depth.md).
+- **`character_inpaint`** — Scene plate + mask + character reference → lighting bake (CLI only for now). See [character_inpaint.md](character_inpaint.md).
+- **Replace Character (timeline)** — Segment → Depth → Character Reference → Pose Lock. See [replace_character.md](replace_character.md).

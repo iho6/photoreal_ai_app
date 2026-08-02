@@ -79,6 +79,26 @@
   let saveTimer = null;
   let saving = false;
 
+  function applyCredentials(c) {
+    if (!c) return;
+    if (c.hf_token_set && c.hf_token && !hf.input.dataset.dirty) {
+      hf.input.value = c.hf_token;
+    }
+    if (c.github_token_set && c.github_token && !github.input.dataset.dirty) {
+      github.input.value = c.github_token;
+    }
+    if (c.runpod_token_set && c.runpod_api_key && !runpod.input.dataset.dirty) {
+      runpod.input.value = c.runpod_api_key;
+    }
+  }
+
+  async function loadCredentialsIntoFields() {
+    // Fast path: do not wait on /api/status (health probes can take seconds).
+    const r = await fetch("/api/credentials");
+    if (!r.ok) throw new Error("credentials HTTP " + r.status);
+    applyCredentials(await r.json());
+  }
+
   async function autoSaveCredentials() {
     if (saving) return;
     const body = collectCredentials();
@@ -105,6 +125,7 @@
         return {};
       });
       if (!r.ok) throw new Error(data.detail || "Save failed");
+      applyCredentials(data);
       await refreshStatus();
     } catch (e) {
       setStatus("<strong>Error:</strong> " + (e.message || e));
@@ -150,15 +171,7 @@
         "</strong>" +
         (cuda ? "" : " · <strong>CPU</strong> torch")
     );
-    if (c.hf_token_set && c.hf_token && !hf.input.dataset.dirty) {
-      hf.input.value = c.hf_token;
-    }
-    if (c.github_token_set && c.github_token && !github.input.dataset.dirty) {
-      github.input.value = c.github_token;
-    }
-    if (c.runpod_token_set && c.runpod_api_key && !runpod.input.dataset.dirty) {
-      runpod.input.value = c.runpod_api_key;
-    }
+    applyCredentials(c);
     return data;
   }
 
@@ -445,6 +458,9 @@
   app.appendChild(downloadMeta);
   app.appendChild(logEl);
 
+  loadCredentialsIntoFields().catch(function () {
+    /* status refresh will retry fill */
+  });
   refreshStatus().catch(function (e) {
     setStatus("Could not reach API: " + (e.message || e));
   });

@@ -24,7 +24,7 @@ Opens `http://127.0.0.1:8010/` — enter **HF token** and **Runpod API key** (au
 ## Stages
 
 1. **Stage 1 (script):** create `.venv`, `pip install -e ".[portal]"`, start API/portal on `:8010`, open browser.
-2. **Stage 2 (Launch button):** write `.env`, install `.[photoreal-gen,vlm]` + curated Comfy deps (`requirements/comfyui-photoreal.txt`) **only if missing**, `download_models.py --all` (skips existing weights), then start **API + ComfyUI**. On success the browser opens the **timeline** studio at `/timeline`.
+2. **Stage 2 (Launch button):** write `.env`, install `.[photoreal-gen,vlm]` + curated Comfy deps (`requirements/comfyui-photoreal.txt`) **only if missing**, `download_models.py --all` (photoreal_gen + vlm + sam3; skips existing weights), then start **API + ComfyUI**. On success the browser opens the **timeline** studio at `/timeline`.
 
 Relaunch / click **Launch** again: cancels any in-flight Stage-2 (kills the download subprocess) and starts fresh. Civitai `.partial` files resume via HTTP Range; Hugging Face resumes incomplete cache shards. Stale Comfy on `:8188` is stopped before restart; a healthy API on `:8010` is left running. Stage-1 skips `.[portal]` when already importable.
 
@@ -126,6 +126,8 @@ Generate logs show `backend=local|runpod`, endpoint id, and remote log lines. Co
 
 Endpoint mounts volume `photoreal-models` at `/runpod-volume/` (datacenter `US-CA-2`, matching `runpod-flash` `DataCenter` + live volume API). Workers need Comfy + weights on that volume — local `data/` on your PC is **not** used by Flash.
 
+**Restart the portal** after Flash datacenter / volume code changes so it reloads `VOLUME_DATACENTER`. Sync pods are always scheduled in the volume’s own datacenter; a stale portal process can otherwise attach the wrong way and fail in seconds.
+
 **Completeness check (automated):** before Generate submits a job, the portal ensures the volume passes a file/size layout check (Flux klein + LoRAs + VLM + `runtime/comfyui/main.py` + extra-paths yaml). If incomplete (or `FLASH_VOLUME_SYNCED` unset), it starts a short-lived Runpod pod attached to the volume that:
 
 1. Re-runs the same completeness probe
@@ -155,7 +157,18 @@ Local `scripts/download_models.py` remains the source of truth for *what* to dow
 
 ## UI kit
 
-Reusable white controls live in [`web/ui/`](../web/ui/). Portal page: [`web/portal/`](../web/portal/). Timeline studio: [`web/timeline/`](../web/timeline/) (opened after a successful Launch) — local NLE: import/drag media onto generic tracks, edit on a ruler/playhead timeline, preview at the playhead (in-memory only; no server persistence yet). **Create Character** opens a modal (also at `/character`) that runs auto-reprompt then `photoreal_gen` via `/api/character/*` (local CUDA + Comfy, or Runpod Flash when configured). Always use `PhotorealUI.createButton` / `createField`.
+Reusable white controls live in [`web/ui/`](../web/ui/). Portal page: [`web/portal/`](../web/portal/). Timeline studio: [`web/timeline/`](../web/timeline/) (opened after a successful Launch) — local NLE: import/drag media onto generic tracks, edit on a ruler/playhead timeline, preview at the playhead (in-memory only; no server persistence yet). **Create Character** opens a modal (also at `/character`) that runs auto-reprompt then `photoreal_gen` via `/api/character/*` (local CUDA + Comfy, or Runpod Flash when configured). **Record Reference** opens a camera modal: local **Vosk** listens for spoken “start” / “stop” (on-screen buttons always work; no cloud ASR), then review → **Save** places a `role=reference` clip on a **References** track. Right-click a clip or the preview → **Replace Character** stages: Segment → Depth → Character Reference → Pose Lock (see [replace_character.md](replace_character.md)). Always use `PhotorealUI.createButton` / `createField`.
+
+### Local voice (Vosk)
+
+Fully offline keyword spotting for Record Reference:
+
+```bash
+pip install -e ".[portal]"   # includes vosk
+python scripts/download_models.py --vosk
+```
+
+Model path: `data/models/vosk/vosk-model-small-en-us-0.15/`. APIs: `GET /api/voice/status`, `POST /api/voice/command` (raw s16le mono PCM @ 16 kHz → `{command: start|stop|none}`).
 
 ## Module map
 
@@ -163,5 +176,7 @@ Reusable white controls live in [`web/ui/`](../web/ui/). Portal page: [`web/port
 |-------|------|
 | Entry | `python -m photoreal.portal` |
 | App | `photoreal/portal/app.py` |
+| Voice (Vosk) | `photoreal/portal/voice_vosk.py` |
+| Record Reference UI | `web/reference/` |
 | Bootstrap | `photoreal/portal/bootstrap.py` |
 | Supervisor | `photoreal/portal/supervisor.py` (+ `_linux` / `_windows`) |

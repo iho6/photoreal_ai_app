@@ -1,0 +1,175 @@
+{
+  "_meta": {
+    "title": "character_inpaint",
+    "description": "FLUX.2 Klein 9B Base + Lenovo + Mrpopo. Place character reference into masked scene region (lighting bake).",
+    "backbone": "flux-2-klein-base-9b.safetensors",
+    "notes": [
+      "Image 20 = scene plate; image 21 = character reference; mask 22 = person region.",
+      "ReferenceLatent order: scene first (lighting/context), character second (identity).",
+      "SetLatentNoiseMask on scene latents — no EmptyFlux2LatentImage, no RefControl.",
+      "Requires Klein Base + style LoRAs from --photoreal-gen only."
+    ]
+  },
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "flux-2-klein-base-9b.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_3_8b.safetensors",
+      "type": "flux2"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    }
+  },
+  "4": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "model": ["1", 0],
+      "clip": ["2", 0],
+      "lora_name": "lenovo_flux_klein9b.safetensors",
+      "strength_model": 0.85,
+      "strength_clip": 0.85
+    }
+  },
+  "5": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "model": ["4", 0],
+      "clip": ["4", 1],
+      "lora_name": "mrpopo_photorealistic.safetensors",
+      "strength_model": 1.0,
+      "strength_clip": 1.0
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["5", 1],
+      "text": "replace the person with the reference character, match scene lighting and camera, photorealistic"
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["5", 1],
+      "text": ""
+    }
+  },
+  "8": {
+    "class_type": "FluxGuidance",
+    "inputs": {
+      "conditioning": ["6", 0],
+      "guidance": 4.0
+    }
+  },
+  "20": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "scene.png"
+    }
+  },
+  "21": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "reference.png"
+    }
+  },
+  "22": {
+    "class_type": "LoadImageMask",
+    "inputs": {
+      "image": "mask.png",
+      "channel": "red"
+    }
+  },
+  "23": {
+    "class_type": "GrowMask",
+    "inputs": {
+      "mask": ["22", 0],
+      "expand": 6,
+      "tapered_corners": true
+    }
+  },
+  "24": {
+    "class_type": "FeatherMask",
+    "inputs": {
+      "mask": ["23", 0],
+      "left": 8,
+      "top": 8,
+      "right": 8,
+      "bottom": 8
+    }
+  },
+  "25": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": ["20", 0],
+      "vae": ["3", 0]
+    }
+  },
+  "26": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": ["21", 0],
+      "vae": ["3", 0]
+    }
+  },
+  "27": {
+    "class_type": "ReferenceLatent",
+    "inputs": {
+      "conditioning": ["8", 0],
+      "latent": ["25", 0]
+    }
+  },
+  "28": {
+    "class_type": "ReferenceLatent",
+    "inputs": {
+      "conditioning": ["27", 0],
+      "latent": ["26", 0]
+    }
+  },
+  "29": {
+    "class_type": "SetLatentNoiseMask",
+    "inputs": {
+      "samples": ["25", 0],
+      "mask": ["24", 0]
+    }
+  },
+  "30": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["5", 0],
+      "seed": 0,
+      "steps": 28,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "positive": ["28", 0],
+      "negative": ["7", 0],
+      "latent_image": ["29", 0],
+      "denoise": 0.95
+    }
+  },
+  "31": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["30", 0],
+      "vae": ["3", 0]
+    }
+  },
+  "32": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["31", 0],
+      "filename_prefix": "character_inpaint"
+    }
+  }
+}

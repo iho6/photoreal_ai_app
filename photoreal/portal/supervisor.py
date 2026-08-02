@@ -103,9 +103,10 @@ def health_snapshot() -> dict[str, Any]:
     settings = get_settings()
     api_url = f"http://{settings.api_host}:{settings.api_port}/api/health"
     comfy_url = f"{settings.comfy_url.rstrip('/')}/system_stats"
+    # Short probes — status UI should not wait seconds when services are down.
     return {
-        "api": {"url": api_url, "ok": _probe(api_url)},
-        "comfy": {"url": comfy_url, "ok": _probe(comfy_url)},
+        "api": {"url": api_url, "ok": _probe(api_url, timeout=0.4)},
+        "comfy": {"url": comfy_url, "ok": _probe(comfy_url, timeout=0.4)},
         "platform": platform.system().lower(),
         "tmux_session": TMUX_SESSION if platform.system().lower() == "linux" else None,
         "logs_dir": str(LOGS_DIR),

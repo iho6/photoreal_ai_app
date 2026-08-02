@@ -50,7 +50,8 @@
     var promptInput = document.createElement("textarea");
     promptInput.id = "ch-prompt";
     promptInput.name = "prompt";
-    promptInput.placeholder = "Describe the character…";
+    promptInput.placeholder =
+      "Describe the person (full-body white studio by default)…";
     promptInput.rows = 3;
     promptWrap.appendChild(promptLabel);
     promptWrap.appendChild(promptInput);

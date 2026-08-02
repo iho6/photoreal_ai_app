@@ -38,6 +38,10 @@ photoreal vlm -p "Explain aperture in one sentence."
 # Popo photoreal rewrite (prints one optimized prompt)
 photoreal reprompt -p "woman in a cafe by the window"
 
+# Character full-body studio / backdrop cinematic scenery packs
+photoreal reprompt -p "redhead in leather jacket" --pack character
+photoreal reprompt -p "looking down a rainy alley at night" --pack backdrop
+
 # rewrite then generate (unloads VLM, then needs Comfy running)
 photoreal reprompt -p "studio portrait" --gen
 ```
@@ -49,6 +53,6 @@ photoreal reprompt -p "studio portrait" --gen
 | Engine | `photoreal/services/vlm_engine.py` |
 | Ability `vlm` | `photoreal/pipelines/vision/vlm.py` |
 | Ability `reprompt` | `photoreal/pipelines/vision/reprompt.py` |
-| Few-shot pack | `photoreal/pipelines/vision/prompts/popo_photoreal_reprompt.json` |
+| Few-shot packs | `photoreal/pipelines/vision/prompts/popo_photoreal_reprompt.json`, `character_reprompt.json`, `backdrop_reprompt.json` |
 
-Few-shots are **SFW** prompts manually pasted from Mrpopo714 (long photographic / surreal NL). Comfy metadata (`Steps` / `CFG` / `Sampler`) is stripped from exemplars.
+Few-shots are **SFW** long photographic NL. Popo exemplars were manually pasted from Mrpopo714; character/backdrop packs adapt that prose for studio references and cinematic location plates. Comfy metadata (`Steps` / `CFG` / `Sampler`) is stripped from exemplars.

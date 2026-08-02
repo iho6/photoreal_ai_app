@@ -24,6 +24,12 @@ echo "=== photoreal volume sync ==="
 echo "volume_root=$VOL force=$FORCE"
 
 mkdir -p "$VOL" "$WORK"
+# Persist progress on the volume (and keep stdout for Runpod SSE when available).
+if command -v tee >/dev/null 2>&1; then
+  exec > >(tee -a "$VOL/photoreal_sync.log") 2>&1
+fi
+echo "=== photoreal volume sync $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+echo "volume_root=$VOL force=$FORCE"
 
 check_complete() {
   python3 - <<'PY'
@@ -58,20 +64,32 @@ if [[ ! -f "$PAYLOAD/download_models.py" ]]; then
   exit 2
 fi
 
-mkdir -p "$VOL/data" "$WORK/repo"
-cp -a "$PAYLOAD/." "$WORK/repo/"
-# download_models writes to <repo>/data/models — point that at the volume
-rm -rf "$WORK/repo/data"
+# Fake repo layout matching local scripts/download_models.py (parents[1] = repo root).
+# Older flat copy wrote to /tmp/photoreal_sync_work/data (container disk) and filled it.
+mkdir -p "$VOL/data" "$VOL/.cache/huggingface" "$WORK/repo/scripts"
+cp -f "$PAYLOAD/download_models.py" "$WORK/repo/scripts/download_models.py"
+cp -f "$PAYLOAD/volume_layout.py" "$WORK/repo/volume_layout.py" 2>/dev/null || true
+cp -f "$PAYLOAD/flash_comfyui_extra_model_paths.yaml" \
+  "$WORK/repo/flash_comfyui_extra_model_paths.yaml" 2>/dev/null || true
+rm -rf "$WORK/repo/data" "$WORK/data"
 ln -sfn "$VOL/data" "$WORK/repo/data"
+# Belt-and-suspenders if an old script still resolves REPO_ROOT to $WORK
+ln -sfn "$VOL/data" "$WORK/data"
 
 python3 -m pip install -q --upgrade pip
 python3 -m pip install -q 'huggingface_hub>=0.24' 'tqdm' 'httpx' 'safetensors'
 
 cd "$WORK/repo"
+export PHOTOREAL_REPO_ROOT="$WORK/repo"
+export PHOTOREAL_MODELS_ROOT="$VOL/data/models"
+export HF_HOME="$VOL/.cache/huggingface"
+export HUGGINGFACE_HUB_CACHE="$HF_HOME"
 export HF_TOKEN="${HF_TOKEN:-}"
 export HUGGING_FACE_HUB_TOKEN="${HUGGING_FACE_HUB_TOKEN:-$HF_TOKEN}"
 export CIVITAI_API_TOKEN="${CIVITAI_API_TOKEN:-}"
-python3 download_models.py --all
+echo "download target models_root=$PHOTOREAL_MODELS_ROOT hf_home=$HF_HOME"
+df -h "$VOL" /tmp 2>/dev/null || true
+python3 scripts/download_models.py --all
 
 # ComfyUI checkout on the volume
 COMFY="$VOL/runtime/comfyui"

@@ -35,8 +35,9 @@ DOWNLOAD_PY = REPO_ROOT / "scripts" / "download_models.py"
 YAML_PATH = REPO_ROOT / "scripts" / "flash_comfyui_extra_model_paths.yaml"
 LAYOUT_PY = REPO_ROOT / "photoreal" / "flash" / "volume_layout.py"
 
-# CPU image with Python + git; volume attaches at /workspace on pods.
-POD_IMAGE = "runpod/base:0.6.2-ubuntu2204-jammy"
+# CPU image with Python + git (must be a real Hub tag — jammy suffix does not exist).
+# Volume attaches at volumeMountPath (/workspace).
+POD_IMAGE = "runpod/base:1.0.7-ubuntu2204"
 
 
 def _emit(log: LogFn | None, msg: str) -> None:
@@ -60,13 +61,19 @@ def volume_sync_needed(*, force: bool = False) -> bool:
     return not volume_sync_flag_set()
 
 
-def ensure_network_volume_id(
+def ensure_network_volume(
     api_key: str,
     *,
     client: httpx.Client | None = None,
     log: LogFn | None = None,
-) -> str:
-    """Return id for volume ``photoreal-models`` in ``VOLUME_DATACENTER`` (create if missing)."""
+) -> tuple[str, str]:
+    """
+    Return ``(volume_id, data_center_id)`` for ``photoreal-models`` in
+    ``VOLUME_DATACENTER`` (create if missing).
+
+    Never reuses a same-named volume in a different datacenter — that causes
+    sync pods scheduled in the wrong DC and empty mounts.
+    """
     key = (api_key or "").strip()
     if not key:
         raise RuntimeError("RUNPOD_API_KEY required to ensure Network Volume")
@@ -86,19 +93,29 @@ def ensure_network_volume_id(
             for v in named
             if str(v.get("dataCenterId") or "") == VOLUME_DATACENTER
         ]
-        chosen = exact[0] if exact else (named[0] if named else None)
-        if chosen is not None:
+        if exact:
+            chosen = exact[0]
             vid = str(chosen.get("id") or "").strip()
-            if vid:
-                dc = str(chosen.get("dataCenterId") or "")
-                if dc and dc != VOLUME_DATACENTER:
-                    _emit(
-                        log,
-                        f"flash: warning volume {VOLUME_NAME!r} is in {dc}, "
-                        f"endpoint expects {VOLUME_DATACENTER}",
-                    )
-                _emit(log, f"flash: volume {VOLUME_NAME!r} id={vid}")
-                return vid
+            dc = str(chosen.get("dataCenterId") or VOLUME_DATACENTER).strip()
+            if not vid:
+                raise RuntimeError(f"Volume {VOLUME_NAME!r} matched but has no id")
+            _emit(log, f"flash: volume {VOLUME_NAME!r} id={vid} dc={dc}")
+            return vid, dc
+
+        wrong = [
+            v
+            for v in named
+            if str(v.get("dataCenterId") or "") != VOLUME_DATACENTER
+        ]
+        if wrong:
+            details = ", ".join(
+                f"id={v.get('id')} dc={v.get('dataCenterId')}" for v in wrong[:5]
+            )
+            _emit(
+                log,
+                f"flash: ignoring {len(wrong)} {VOLUME_NAME!r} volume(s) outside "
+                f"{VOLUME_DATACENTER} ({details}); creating one in {VOLUME_DATACENTER}",
+            )
 
         _emit(log, f"flash: creating network volume {VOLUME_NAME!r} @ {VOLUME_DATACENTER}…")
         create = http.post(
@@ -116,13 +133,25 @@ def ensure_network_volume_id(
             )
         body = create.json()
         vid = str(body.get("id") or "").strip()
+        dc = str(body.get("dataCenterId") or VOLUME_DATACENTER).strip()
         if not vid:
             raise RuntimeError(f"Create volume response missing id: {body!r}")
-        _emit(log, f"flash: created volume id={vid}")
-        return vid
+        _emit(log, f"flash: created volume id={vid} dc={dc}")
+        return vid, dc
     finally:
         if owns:
             http.close()
+
+
+def ensure_network_volume_id(
+    api_key: str,
+    *,
+    client: httpx.Client | None = None,
+    log: LogFn | None = None,
+) -> str:
+    """Return volume id only (compat wrapper). Prefer ``ensure_network_volume``."""
+    vid, _dc = ensure_network_volume(api_key, client=client, log=log)
+    return vid
 
 
 def sync_volume_models(
@@ -159,32 +188,29 @@ def sync_volume_models(
         return
 
     with httpx.Client(timeout=httpx.Timeout(60.0, read=120.0)) as http:
-        volume_id = ensure_network_volume_id(api_key, client=http, log=log)
-        # check_only → completeness probe only; force → re-download gaps; else fill if incomplete
-        start_script = _build_pod_start_script(
-            force=force and not check_only,
-            check_only=check_only,
-        )
-
+        volume_id, volume_dc = ensure_network_volume(api_key, client=http, log=log)
+        # Assets are chunked into pod env inside _create_sync_pod
         _emit(
             log,
             "flash: starting volume sync/check pod "
+            f"@ {volume_dc} "
             "(downloads only if incomplete; may take hours)…",
         )
         pod_id = _create_sync_pod(
             http,
             api_key=api_key,
             volume_id=volume_id,
+            volume_dc=volume_dc,
             hf_token=hf,
             civitai=(creds.get("civitai_api_token") or "").strip(),
-            start_script=start_script,
             force=force and not check_only,
             check_only=check_only,
             log=log,
         )
         _emit(log, f"flash: volume pod id={pod_id}")
+        last_logs = ""
         try:
-            ok = _wait_pod_signal(
+            ok, last_logs = _wait_pod_signal(
                 http,
                 api_key=api_key,
                 pod_id=pod_id,
@@ -192,21 +218,34 @@ def sync_volume_models(
                 log=log,
             )
             if not ok:
-                # Confirm via a second short check pod (completeness only)
-                _emit(log, "flash: verifying volume completeness with check pod…")
-                ok = _run_check_pod(
-                    http,
-                    api_key=api_key,
-                    volume_id=volume_id,
-                    timeout_s=min(timeout_s, 1800.0),
-                    log=log,
-                )
+                if check_only:
+                    # Already ran a completeness-only pod; no need for a second one.
+                    pass
+                else:
+                    # Confirm via a second short check pod (completeness only)
+                    _emit(log, "flash: verifying volume completeness with check pod…")
+                    ok, check_logs = _run_check_pod(
+                        http,
+                        api_key=api_key,
+                        volume_id=volume_id,
+                        volume_dc=volume_dc,
+                        timeout_s=min(timeout_s, 1800.0),
+                        log=log,
+                    )
+                    if check_logs:
+                        last_logs = check_logs
             if not ok:
                 save_credentials(flash_volume_synced="")
+                tail = _log_tail(last_logs, max_lines=40)
+                extra = f"\nPod log tail:\n{tail}" if tail else ""
                 raise RuntimeError(
                     "Network Volume models are incomplete after sync/check. "
+                    "Restart the portal after Flash datacenter changes so "
+                    f"VOLUME_DATACENTER={VOLUME_DATACENTER} is loaded. "
+                    "First fill can take hours. "
                     "See pod logs in the Runpod console, ensure HF_TOKEN can access "
                     "FLUX NC + Qwen, then retry: python scripts/flash_sync_volume.py --force"
+                    f"{extra}"
                 )
             save_credentials(flash_volume_synced="1")
             _emit(log, "flash: volume models verified complete; FLASH_VOLUME_SYNCED=1")
@@ -233,61 +272,53 @@ def _as_list(data: Any) -> list[dict[str, Any]]:
 
 
 def _b64(path: Path) -> str:
-    return base64.b64encode(path.read_bytes()).decode("ascii")
+    # Pods run Linux bash — strip Windows CRLF so `set -o pipefail` etc. work.
+    data = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return base64.b64encode(data).decode("ascii")
 
 
-def _build_pod_start_script(*, force: bool, check_only: bool) -> str:
-    """Assemble bash that materializes payload then runs bootstrap or check-only."""
-    for path in (BOOTSTRAP, DOWNLOAD_PY, YAML_PATH, LAYOUT_PY):
-        if not path.is_file():
-            raise RuntimeError(f"Missing sync asset: {path}")
+def _chunk_env(prefix: str, data: str, env: dict[str, str], *, size: int = 8_000) -> None:
+    chunks = [data[i : i + size] for i in range(0, len(data), size)] or [""]
+    env[f"{prefix}_N"] = str(len(chunks))
+    for i, ch in enumerate(chunks):
+        env[f"{prefix}_{i}"] = ch
 
-    parts = {
-        "bootstrap.sh": _b64(BOOTSTRAP),
-        "download_models.py": _b64(DOWNLOAD_PY),
-        "flash_comfyui_extra_model_paths.yaml": _b64(YAML_PATH),
-        "volume_layout.py": _b64(LAYOUT_PY),
-    }
-    force_s = "1" if force else "0"
-    decode_lines = [
-        "set -euo pipefail",
-        "PAYLOAD=/tmp/photoreal_sync_payload",
-        "mkdir -p \"$PAYLOAD\"",
-    ]
-    for name, b64 in parts.items():
-        decode_lines.append(f"echo '{b64}' | base64 -d > \"$PAYLOAD/{name}\"")
-    decode_lines.append("chmod +x \"$PAYLOAD/bootstrap.sh\"")
-    decode_lines.append("export PHOTOREAL_SYNC_PAYLOAD=\"$PAYLOAD\"")
-    decode_lines.append(f"export PHOTOREAL_FORCE_SYNC={force_s}")
-    if check_only:
-        decode_lines.extend(
-            [
-                "export PHOTOREAL_VOLUME_ROOT=${PHOTOREAL_VOLUME_ROOT:-/workspace}",
-                "if [[ ! -d $PHOTOREAL_VOLUME_ROOT ]]; then "
-                "if [[ -d /runpod-volume ]]; then export PHOTOREAL_VOLUME_ROOT=/runpod-volume; "
-                "else export PHOTOREAL_VOLUME_ROOT=/workspace; fi; fi",
-                "python3 - <<'PY'",
-                "import os, sys",
-                "sys.path.insert(0, os.environ['PHOTOREAL_SYNC_PAYLOAD'])",
-                "from volume_layout import volume_missing_parts",
-                "from pathlib import Path",
-                "root = Path(os.environ['PHOTOREAL_VOLUME_ROOT'])",
-                "missing = volume_missing_parts(root)",
-                "if missing:",
-                "    print('INCOMPLETE:')",
-                "    [print('  -', m) for m in missing]",
-                "    print('PHOTOREAL_VOLUME_SYNC_FAIL incomplete')",
-                "    sys.exit(1)",
-                "print('COMPLETE')",
-                "print('PHOTOREAL_VOLUME_SYNC_OK already_complete')",
-                "Path(root, '.photoreal_volume_ready').touch()",
-                "sys.exit(0)",
-                "PY",
-            ]
-        )
-    else:
-        decode_lines.append("bash \"$PAYLOAD/bootstrap.sh\"")
-    return "\n".join(decode_lines)
+
+def _build_check_only_script() -> str:
+    """Small inline completeness check (no download_models embed)."""
+    return "\n".join(
+        [
+            "set -euo pipefail",
+            "export PHOTOREAL_VOLUME_ROOT=${PHOTOREAL_VOLUME_ROOT:-/workspace}",
+            "if [[ ! -d $PHOTOREAL_VOLUME_ROOT ]]; then "
+            "if [[ -d /runpod-volume ]]; then export PHOTOREAL_VOLUME_ROOT=/runpod-volume; "
+            "else export PHOTOREAL_VOLUME_ROOT=/workspace; fi; fi",
+            "python3 - <<'PY'",
+            "import os, sys",
+            "sys.path.insert(0, os.environ['PHOTOREAL_SYNC_PAYLOAD'])",
+            "from volume_layout import volume_missing_parts",
+            "from pathlib import Path",
+            "root = Path(os.environ['PHOTOREAL_VOLUME_ROOT'])",
+            "missing = volume_missing_parts(root)",
+            "if missing:",
+            "    print('INCOMPLETE:', flush=True)",
+            "    [print('  -', m, flush=True) for m in missing]",
+            "    print('PHOTOREAL_VOLUME_SYNC_FAIL incomplete', flush=True)",
+            "    sys.exit(1)",
+            "print('COMPLETE', flush=True)",
+            "print('PHOTOREAL_VOLUME_SYNC_OK already_complete', flush=True)",
+            "Path(root, '.photoreal_volume_ready').touch()",
+            "sys.exit(0)",
+            "PY",
+        ]
+    )
+
+
+def _log_tail(text: str, *, max_lines: int = 40) -> str:
+    lines = [ln for ln in (text or "").splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    return "\n".join(lines[-max_lines:])
 
 
 def _create_sync_pod(
@@ -295,9 +326,9 @@ def _create_sync_pod(
     *,
     api_key: str,
     volume_id: str,
+    volume_dc: str,
     hf_token: str,
     civitai: str,
-    start_script: str,
     force: bool,
     check_only: bool,
     log: LogFn | None = None,
@@ -306,46 +337,93 @@ def _create_sync_pod(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    # Keep start script under control: write via env file in command
-    # dockerStartCmd runs bash -lc with script from base64 env to avoid huge JSON issues
-    script_b64 = base64.b64encode(start_script.encode("utf-8")).decode("ascii")
-    # Chunk if needed — Runpod env value limits; script can be large due to download_models
-    # Prefer writing script from multiple env parts
-    chunks = [script_b64[i : i + 8_000] for i in range(0, len(script_b64), 8_000)]
-    env = {
+    for path in (BOOTSTRAP, DOWNLOAD_PY, YAML_PATH, LAYOUT_PY):
+        if not path.is_file():
+            raise RuntimeError(f"Missing sync asset: {path}")
+
+    env: dict[str, str] = {
         "HF_TOKEN": hf_token,
         "HUGGING_FACE_HUB_TOKEN": hf_token,
         "CIVITAI_API_TOKEN": civitai,
         "PHOTOREAL_FORCE_SYNC": "1" if force else "0",
-        "PHOTOREAL_SYNC_CHUNKS": str(len(chunks)),
+        "PHOTOREAL_CHECK_ONLY": "1" if check_only else "0",
+        "PYTHONUNBUFFERED": "1",
+        "PHOTOREAL_VOLUME_ROOT": "/workspace",
     }
-    for i, ch in enumerate(chunks):
-        env[f"PHOTOREAL_SYNC_B64_{i}"] = ch
+    # Decode assets from env on the pod (avoids giant echo|base64 lines in a script).
+    _chunk_env("PHOTOREAL_F_bootstrap_sh", _b64(BOOTSTRAP), env)
+    _chunk_env("PHOTOREAL_F_download_models_py", _b64(DOWNLOAD_PY), env)
+    _chunk_env("PHOTOREAL_F_extra_yaml", _b64(YAML_PATH), env)
+    _chunk_env("PHOTOREAL_F_volume_layout_py", _b64(LAYOUT_PY), env)
+    if check_only:
+        _chunk_env(
+            "PHOTOREAL_F_check_sh",
+            base64.b64encode(_build_check_only_script().encode("utf-8")).decode("ascii"),
+            env,
+        )
 
-    wrapper = (
-        "set -euo pipefail; "
-        "python3 - <<'PY'\n"
-        "import os, base64\n"
-        "n = int(os.environ.get('PHOTOREAL_SYNC_CHUNKS', '0'))\n"
-        "data = ''.join(os.environ.get(f'PHOTOREAL_SYNC_B64_{i}', '') for i in range(n))\n"
-        "open('/tmp/photoreal_sync_start.sh', 'wb').write(base64.b64decode(data))\n"
-        "PY\n"
-        "bash /tmp/photoreal_sync_start.sh"
-    )
+    # Line-buffered stdout + heartbeat on the volume (SSE logs often stay empty
+    # while bash fully-buffers a long-running non-TTY process).
+    wrapper = r"""
+set -euo pipefail
+VOL="${PHOTOREAL_VOLUME_ROOT:-/workspace}"
+mkdir -p "$VOL" /tmp/photoreal_sync_payload
+echo "photoreal-vol-sync: starting $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a "$VOL/photoreal_sync.log"
+echo "photoreal-vol-sync: python=$(command -v python3 || echo missing)" | tee -a "$VOL/photoreal_sync.log"
+decode_asset() {
+  local prefix="$1" out="$2"
+  local n_var="${prefix}_N"
+  local n="${!n_var}"
+  local i=0 varname
+  : > /tmp/_photoreal_asset.b64
+  while [ "$i" -lt "$n" ]; do
+    varname="${prefix}_$i"
+    printf '%s' "${!varname}" >> /tmp/_photoreal_asset.b64
+    i=$((i+1))
+  done
+  base64 -d /tmp/_photoreal_asset.b64 > "$out"
+}
+PAYLOAD=/tmp/photoreal_sync_payload
+decode_asset PHOTOREAL_F_bootstrap_sh "$PAYLOAD/bootstrap.sh"
+decode_asset PHOTOREAL_F_download_models_py "$PAYLOAD/download_models.py"
+decode_asset PHOTOREAL_F_extra_yaml "$PAYLOAD/flash_comfyui_extra_model_paths.yaml"
+decode_asset PHOTOREAL_F_volume_layout_py "$PAYLOAD/volume_layout.py"
+chmod +x "$PAYLOAD/bootstrap.sh"
+export PHOTOREAL_SYNC_PAYLOAD="$PAYLOAD"
+export PHOTOREAL_FORCE_SYNC="${PHOTOREAL_FORCE_SYNC:-0}"
+echo "photoreal-vol-sync: assets ready check_only=${PHOTOREAL_CHECK_ONLY:-0}" | tee -a "$VOL/photoreal_sync.log"
+if [ "${PHOTOREAL_CHECK_ONLY:-0}" = "1" ]; then
+  decode_asset PHOTOREAL_F_check_sh /tmp/photoreal_check.sh
+  chmod +x /tmp/photoreal_check.sh
+  if command -v stdbuf >/dev/null 2>&1; then
+    exec stdbuf -oL -eL bash /tmp/photoreal_check.sh
+  fi
+  exec bash /tmp/photoreal_check.sh
+fi
+if command -v stdbuf >/dev/null 2>&1; then
+  exec stdbuf -oL -eL bash "$PAYLOAD/bootstrap.sh"
+fi
+exec bash "$PAYLOAD/bootstrap.sh"
+""".strip().replace("\r\n", "\n").replace("\r", "\n")
 
+    dc = (volume_dc or VOLUME_DATACENTER).strip() or VOLUME_DATACENTER
     name = "photoreal-vol-check" if check_only else "photoreal-vol-sync"
     body: dict[str, Any] = {
         "name": name,
         "imageName": POD_IMAGE,
         "cloudType": "SECURE",
         "computeType": "CPU",
-        "dataCenterIds": [VOLUME_DATACENTER],
+        "dataCenterIds": [dc],
         "vcpuCount": 4,
-        "containerDiskInGb": 30,
+        # Scratch only — weights must land on the network volume (see bootstrap).
+        # Keep modest headroom for pip / HF temp; do not rely on this for models.
+        "containerDiskInGb": 40,
         "networkVolumeId": volume_id,
+        "volumeMountPath": "/workspace",
         "ports": ["22/tcp"],
         "env": env,
-        "dockerStartCmd": ["bash", "-lc", wrapper],
+        "dockerEntrypoint": ["/bin/bash", "-c"],
+        "dockerStartCmd": [wrapper],
     }
     resp = http.post(PODS_URL, headers=headers, json=body)
     if resp.status_code >= 400:
@@ -381,71 +459,172 @@ def _wait_pod_signal(
     pod_id: str,
     timeout_s: float,
     log: LogFn | None,
-) -> bool:
-    """Return True if PHOTOREAL_VOLUME_SYNC_OK seen in logs or inferred."""
+) -> tuple[bool, str]:
+    """Return (ok, last_log_text) if PHOTOREAL_VOLUME_SYNC_OK seen in logs."""
     deadline = time.time() + timeout_s
     headers = {"Authorization": f"Bearer {api_key}"}
     saw_fail = False
     last_status = ""
+    last_logs = ""
     while time.time() < deadline:
-        st = http.get(f"{PODS_URL}/{pod_id}", headers=headers)
-        if st.status_code < 400:
-            info = st.json()
-            status = str(
-                info.get("desiredStatus")
-                or info.get("lastStatus")
-                or info.get("status")
-                or ""
-            ).upper()
-            if status and status != last_status:
-                _emit(log, f"flash: volume pod status={status}")
-                last_status = status
-            if status in ("EXITED", "DEAD", "TERMINATED"):
-                break
+        try:
+            st = http.get(f"{PODS_URL}/{pod_id}", headers=headers)
+            if st.status_code < 400:
+                info = st.json()
+                status = str(
+                    info.get("desiredStatus")
+                    or info.get("lastStatus")
+                    or info.get("status")
+                    or ""
+                ).upper()
+                if status and status != last_status:
+                    _emit(log, f"flash: volume pod status={status}")
+                    last_status = status
+                if status in ("EXITED", "DEAD", "TERMINATED"):
+                    break
 
-        # Best-effort log scrape (v2 SSE / snapshot)
-        text = _fetch_pod_logs_snapshot(http, api_key=api_key, pod_id=pod_id)
-        if text:
-            if "PHOTOREAL_VOLUME_SYNC_OK" in text:
-                _emit(log, "flash: saw PHOTOREAL_VOLUME_SYNC_OK in pod logs")
-                return True
-            if "PHOTOREAL_VOLUME_SYNC_FAIL" in text:
-                saw_fail = True
-                _emit(log, "flash: saw PHOTOREAL_VOLUME_SYNC_FAIL in pod logs")
-                break
+            # Best-effort log scrape (v2 SSE / snapshot)
+            text = _fetch_pod_logs_snapshot(http, api_key=api_key, pod_id=pod_id)
+            if text:
+                if text != last_logs:
+                    # Surface progress during multi-hour downloads (not only OK/FAIL).
+                    progress = [
+                        ln
+                        for ln in text.splitlines()
+                        if any(
+                            k in ln
+                            for k in (
+                                "photoreal-vol-sync:",
+                                "=== photoreal",
+                                "Volume incomplete",
+                                "Downloading",
+                                "Fetching",
+                                "download target",
+                                "Cloning ComfyUI",
+                                "PHOTOREAL_VOLUME",
+                                "ERROR",
+                                "Not enough free disk",
+                                "pip ",
+                            )
+                        )
+                    ]
+                    if progress:
+                        _emit(log, f"flash: pod… {progress[-1][-240:]}")
+                last_logs = text
+                if "PHOTOREAL_VOLUME_SYNC_OK" in text:
+                    _emit(log, "flash: saw PHOTOREAL_VOLUME_SYNC_OK in pod logs")
+                    return True, last_logs
+                if "PHOTOREAL_VOLUME_SYNC_FAIL" in text:
+                    saw_fail = True
+                    _emit(log, "flash: saw PHOTOREAL_VOLUME_SYNC_FAIL in pod logs")
+                    break
+        except (
+            httpx.ConnectError,
+            httpx.ConnectTimeout,
+            httpx.ReadTimeout,
+            httpx.RemoteProtocolError,
+            httpx.NetworkError,
+        ) as exc:
+            # Local WiFi/DNS blips must not kill the remote download pod.
+            _emit(log, f"flash: transient network error polling pod ({exc!s}); retrying…")
         time.sleep(15.0)
 
+    # Final log scrape after exit
+    text = _fetch_pod_logs_snapshot(http, api_key=api_key, pod_id=pod_id)
+    if text:
+        last_logs = text
+        if "PHOTOREAL_VOLUME_SYNC_OK" in text:
+            return True, last_logs
+        if "PHOTOREAL_VOLUME_SYNC_FAIL" in text:
+            saw_fail = True
+
     if saw_fail:
-        return False
+        return False, last_logs
     # Pod finished without log signal — caller may verify with check pod
-    return False
+    return False, last_logs
 
 
 def _fetch_pod_logs_snapshot(
     http: httpx.Client, *, api_key: str, pod_id: str
 ) -> str:
-    headers = {"Authorization": f"Bearer {api_key}"}
-    urls = (
-        f"https://rest.runpod.io/v2/pods/{pod_id}/logs",
-        f"https://rest.runpod.io/v1/pods/{pod_id}/logs",
-    )
-    chunks: list[str] = []
-    for url in urls:
-        try:
-            with http.stream("GET", url, headers=headers, timeout=20.0) as resp:
-                if resp.status_code >= 400:
-                    continue
-                n = 0
-                for line in resp.iter_lines():
-                    if line:
-                        chunks.append(line)
-                    n += 1
-                    if n > 500:
+    """
+    Snapshot container/system logs via Runpod API v2 SSE.
+
+    Docs: GET https://api.runpod.io/v2/pods/{id}/logs?tail=N
+    Each event ``data:`` payload is ``{"source","line","ts"}``.
+    ``rest.runpod.io/.../logs`` redirects to HTML docs — do not use it.
+    """
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "text/event-stream",
+    }
+    url = f"https://api.runpod.io/v2/pods/{pod_id}/logs?tail=500"
+    raw = ""
+    try:
+        with http.stream(
+            "GET",
+            url,
+            headers=headers,
+            timeout=httpx.Timeout(12.0, connect=10.0),
+            follow_redirects=False,
+        ) as resp:
+            if resp.status_code in (301, 302, 303, 307, 308):
+                return (
+                    "(pod logs redirected — expected api.runpod.io SSE; "
+                    f"got HTTP {resp.status_code})"
+                )
+            if resp.status_code >= 400:
+                return f"(pod logs HTTP {resp.status_code})"
+            ctype = (resp.headers.get("content-type") or "").lower()
+            parts: list[bytes] = []
+            total = 0
+            deadline = time.time() + 10.0
+            try:
+                for chunk in resp.iter_bytes():
+                    if not chunk:
                         break
-            if chunks:
-                return "\n".join(chunks)
-        except Exception:  # noqa: BLE001
-            continue
+                    parts.append(chunk)
+                    total += len(chunk)
+                    if total >= 512_000 or time.time() >= deadline:
+                        break
+            except httpx.ReadTimeout:
+                pass
+            raw = b"".join(parts).decode("utf-8", errors="replace")
+            if "text/html" in ctype or raw.lstrip().lower().startswith(
+                ("<!doctype", "<html", "<a href=")
+            ):
+                return (
+                    "(pod logs returned HTML/redirect — check RUNPOD_API_KEY "
+                    "and use api.runpod.io, not rest.runpod.io)"
+                )
+    except Exception as exc:  # noqa: BLE001
+        return f"(could not fetch pod logs: {exc})"
+
+    lines_out: list[str] = []
+    for block in raw.split("\n\n"):
+        for line in block.split("\n"):
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                obj = json.loads(payload)
+            except json.JSONDecodeError:
+                lines_out.append(payload)
+                continue
+            if isinstance(obj, dict):
+                src = str(obj.get("source") or "").strip()
+                ln = str(obj.get("line") or "").rstrip()
+                if ln:
+                    lines_out.append(f"[{src}] {ln}" if src else ln)
+            elif payload:
+                lines_out.append(payload)
+
+    if lines_out:
+        return "\n".join(lines_out)
+    if raw.strip():
+        return raw.strip()[-4000:]
     return ""
 
 
@@ -454,17 +633,17 @@ def _run_check_pod(
     *,
     api_key: str,
     volume_id: str,
+    volume_dc: str,
     timeout_s: float,
     log: LogFn | None,
-) -> bool:
-    script = _build_pod_start_script(force=False, check_only=True)
+) -> tuple[bool, str]:
     pod_id = _create_sync_pod(
         http,
         api_key=api_key,
         volume_id=volume_id,
+        volume_dc=volume_dc,
         hf_token="",
         civitai="",
-        start_script=script,
         force=False,
         check_only=True,
         log=log,
@@ -496,6 +675,7 @@ __all__ = [
     "READY_MARKER",
     "VOLUME_DATACENTER",
     "VOLUME_NAME",
+    "ensure_network_volume",
     "ensure_network_volume_id",
     "ensure_volume_models_ready",
     "sync_volume_models",

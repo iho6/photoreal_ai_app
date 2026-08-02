@@ -1,0 +1,161 @@
+{
+  "_meta": {
+    "title": "character_depth",
+    "description": "FLUX.2 Klein 9B Base + Lenovo + Mrpopo + RefControl depth LoRA. Depth map + character reference via ReferenceLatent chain.",
+    "backbone": "flux-2-klein-base-9b.safetensors",
+    "notes": [
+      "Image 20 = depth (structure); image 21 = character reference (identity).",
+      "ReferenceLatent order: depth first, then character.",
+      "Prompt should include trigger token: refcontrol",
+      "Requires flux2_klein_9b_refcontrol_depth.safetensors under loras/."
+    ]
+  },
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "flux-2-klein-base-9b.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_3_8b.safetensors",
+      "type": "flux2"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    }
+  },
+  "4": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "model": ["1", 0],
+      "clip": ["2", 0],
+      "lora_name": "lenovo_flux_klein9b.safetensors",
+      "strength_model": 0.85,
+      "strength_clip": 0.85
+    }
+  },
+  "5": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "model": ["4", 0],
+      "clip": ["4", 1],
+      "lora_name": "mrpopo_photorealistic.safetensors",
+      "strength_model": 1.0,
+      "strength_clip": 1.0
+    }
+  },
+  "6": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "model": ["5", 0],
+      "clip": ["5", 1],
+      "lora_name": "flux2_klein_9b_refcontrol_depth.safetensors",
+      "strength_model": 0.9,
+      "strength_clip": 0.9
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["6", 1],
+      "text": "refcontrol"
+    }
+  },
+  "8": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["6", 1],
+      "text": ""
+    }
+  },
+  "9": {
+    "class_type": "FluxGuidance",
+    "inputs": {
+      "conditioning": ["7", 0],
+      "guidance": 4.0
+    }
+  },
+  "20": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "depth.png"
+    }
+  },
+  "21": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "reference.png"
+    }
+  },
+  "22": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": ["20", 0],
+      "vae": ["3", 0]
+    }
+  },
+  "23": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": ["21", 0],
+      "vae": ["3", 0]
+    }
+  },
+  "24": {
+    "class_type": "ReferenceLatent",
+    "inputs": {
+      "conditioning": ["9", 0],
+      "latent": ["22", 0]
+    }
+  },
+  "25": {
+    "class_type": "ReferenceLatent",
+    "inputs": {
+      "conditioning": ["24", 0],
+      "latent": ["23", 0]
+    }
+  },
+  "26": {
+    "class_type": "EmptyFlux2LatentImage",
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    }
+  },
+  "27": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["6", 0],
+      "seed": 0,
+      "steps": 28,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "positive": ["25", 0],
+      "negative": ["8", 0],
+      "latent_image": ["26", 0],
+      "denoise": 1.0
+    }
+  },
+  "28": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["27", 0],
+      "vae": ["3", 0]
+    }
+  },
+  "29": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["28", 0],
+      "filename_prefix": "character_depth"
+    }
+  }
+}

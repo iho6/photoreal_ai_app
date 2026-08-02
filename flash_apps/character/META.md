@@ -11,6 +11,8 @@
 | **Portal cache** | `.env` → `FLASH_CHARACTER_ENDPOINT` |
 | **Status** | active |
 
+Restart the **portal** after changing datacenter/volume code so sync uses `US-CA-2`. First model fill onto the volume can take hours.
+
 ## What it does
 
 Create Character / portal Generate: VLM reprompt → `photoreal_gen` via Comfy on the volume.

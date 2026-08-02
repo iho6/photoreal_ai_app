@@ -12,3 +12,11 @@ photoreal_data:
   clip: models/flux2/klein-base-9b/text_encoder/
   loras: models/loras/
   embeddings: models/embeddings/
+
+photoreal_sam3:
+  base_path: /runpod-volume/data/
+  checkpoints: models/sam3/
+
+photoreal_depth:
+  base_path: /runpod-volume/data/
+  geometry_estimation: models/depth_anything3/
