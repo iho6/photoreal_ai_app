@@ -23,3 +23,13 @@ photoreal_sam3:
 photoreal_depth:
   base_path: data/
   geometry_estimation: models/depth_anything3/
+
+# Wan2.2 Animate (wan_animate ability — Animation / Move mode)
+photoreal_wan:
+  base_path: data/
+  diffusion_models: models/wan/diffusion_models/
+  text_encoders: models/wan/text_encoders/
+  vae: models/wan/vae/
+  clip_vision: models/wan/clip_vision/
+  loras: models/wan/loras/
+  detection: models/wan/detection/

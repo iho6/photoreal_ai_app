@@ -273,6 +273,8 @@
           : "ref";
     } else if (clip.role === "location") {
       badge.textContent = "loc";
+    } else if (clip.role === "animate") {
+      badge.textContent = "anim";
     } else {
       badge.textContent = clip.mediaType;
     }

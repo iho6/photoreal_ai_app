@@ -167,6 +167,37 @@ def _cmd_character_inpaint(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_wan_animate(args: argparse.Namespace) -> int:
+    from photoreal.pipelines.video.wan_animate import WanAnimatePipeline
+
+    pipe = WanAnimatePipeline()
+    paths = pipe.run(
+        character_image=args.character,
+        driving_video=args.video,
+        prompt=args.prompt,
+        negative_prompt=args.negative_prompt,
+        width=args.width,
+        height=args.height,
+        length=args.length,
+        seed=args.seed,
+        steps=args.steps,
+        cfg=args.cfg,
+        fps=args.fps,
+        lora_strength=args.lora_strength,
+        shift=args.shift,
+        video_frame_offset=args.offset,
+        continue_motion=args.continue_motion,
+        continue_motion_max_frames=args.continue_motion_max_frames,
+        driving_frame_count=args.driving_frames,
+        onnx_device=args.onnx_device,
+        comfy_url=args.comfy_url,
+        output_dir=args.output_dir,
+    )
+    for p in paths:
+        print(p)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="photoreal", description="Photoreal AI CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -374,6 +405,89 @@ def build_parser() -> argparse.ArgumentParser:
     sam3.add_argument("--comfy-url", default="http://127.0.0.1:8188")
     sam3.add_argument("--output-dir", default=None)
     sam3.set_defaults(func=_cmd_sam3)
+
+    wan = sub.add_parser(
+        "wan-animate",
+        help=(
+            "Wan2.2 Animate Animation (Move) mode: pose-locked character + "
+            "driving video (Comfy must be running with WanAnimatePreprocess)"
+        ),
+    )
+    wan.add_argument(
+        "--character",
+        required=True,
+        help="Pose-locked character still (e.g. Pose Lock / character_depth bake)",
+    )
+    wan.add_argument(
+        "--video",
+        required=True,
+        help="Driving / reference video (performer motion)",
+    )
+    wan.add_argument(
+        "--prompt",
+        "-p",
+        default="a person moving naturally, photorealistic",
+        help="Positive prompt",
+    )
+    wan.add_argument(
+        "--negative-prompt",
+        default="blurry, low quality, distorted face, deformed hands",
+    )
+    wan.add_argument("--width", type=int, default=832)
+    wan.add_argument("--height", type=int, default=480)
+    wan.add_argument(
+        "--length",
+        type=int,
+        default=77,
+        help="Frame count (Wan I2V single-chunk limit; multiples of 4 + 1 typical)",
+    )
+    wan.add_argument("--seed", type=int, default=None)
+    wan.add_argument(
+        "--steps",
+        type=int,
+        default=4,
+        help="Sampler steps (4–6 with LightX2V distill LoRA)",
+    )
+    wan.add_argument("--cfg", type=float, default=1.0)
+    wan.add_argument(
+        "--fps",
+        type=float,
+        default=None,
+        help="Output fps (default: detect from driving video, else 24)",
+    )
+    wan.add_argument("--lora-strength", type=float, default=1.0)
+    wan.add_argument("--shift", type=float, default=8.0, help="ModelSamplingSD3 shift")
+    wan.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="Driving video frame offset (for Extend Animate chunks)",
+    )
+    wan.add_argument(
+        "--continue-motion",
+        default=None,
+        help="Prior animate chunk video (last N frames used as continue_motion)",
+    )
+    wan.add_argument(
+        "--continue-motion-max-frames",
+        type=int,
+        default=5,
+        help="Overlap frames from --continue-motion (default 5)",
+    )
+    wan.add_argument(
+        "--driving-frames",
+        type=int,
+        default=None,
+        help="Driving frame count (auto-shorten length; else ffprobe if available)",
+    )
+    wan.add_argument(
+        "--onnx-device",
+        default="CUDAExecutionProvider",
+        choices=("CUDAExecutionProvider", "CPUExecutionProvider"),
+    )
+    wan.add_argument("--comfy-url", default="http://127.0.0.1:8188")
+    wan.add_argument("--output-dir", default=None)
+    wan.set_defaults(func=_cmd_wan_animate)
 
     return parser
 

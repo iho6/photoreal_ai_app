@@ -11,6 +11,10 @@ pose-accurate character still (later: Wan animate). **Not** a single auto-chain 
 | **Depth** | Segment mask + frame | `depth_subject` person-only depth from the **reference** plate. **Show Depth** preview overlay. |
 | **Character Reference** | Segment cutout + overlapping **`role=location`** | Hover gallery → composite cutout onto Location plate → `character_inpaint`. Lighting from Location, not the reference plate. |
 | **Pose Lock** | Depth + inpaint bake | `character_depth` RefControl using ref depth + lighting bake. **Show Pose Lock** preview. |
+| **Wan Animate** | Pose Lock + video `src` | First chunk → new `role=animate` clip on **Animate** track. |
+| **Extend Animate** | `role=animate` clip | Next chunk via `continue_motion` + offset; auto-shortens if ref ends. |
+
+Driving fps is preserved on output (prefer 24 fps capture). See [wan_animate.md](wan_animate.md).
 
 ### Backdrop auto-detect
 
@@ -37,6 +41,6 @@ Static: `/sam3-outputs`, `/depth-outputs`, `/inpaint-outputs`, `/pose-lock-outpu
 
 ## Clip fields
 
-`segmentMaskUrl`, `segmentFrameUrl`, `segmentCutoutUrl`, `showSegment`, `depthUrl`, `showDepth`, `inpaintUrl`, `showInpaint`, `backdropClipId`, `poseLockUrl`, `showPoseLock`, plus on references `role=reference` and `refSlot`.
+`segmentMaskUrl`, `segmentFrameUrl`, `segmentCutoutUrl`, `showSegment`, `depthUrl`, `showDepth`, `inpaintUrl`, `showInpaint`, `backdropClipId`, `poseLockUrl`, `showPoseLock`, plus on references `role=reference` and `refSlot`. Animate outputs: `role=animate` with `drivingVideoSrc`, `characterStillUrl`, `videoFrameOffset`, `wanLength`, `wanFps`, `drivingFrameCount`.
 
 Preview priority: Pose Lock → Character Reference (inpaint) → Depth → Segment → media.

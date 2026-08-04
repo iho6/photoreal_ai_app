@@ -52,4 +52,5 @@ flowchart TB
 - **`depth_subject`** — Depth Anything 3 + SAM mask composite (person-only depth). See [depth_subject.md](depth_subject.md).
 - **`character_depth`** — Depth map + character reference via RefControl depth LoRA (CLI only for now). See [character_depth.md](character_depth.md).
 - **`character_inpaint`** — Scene plate + mask + character reference → lighting bake (CLI only for now). See [character_inpaint.md](character_inpaint.md).
-- **Replace Character (timeline)** — Segment → Depth → Character Reference → Pose Lock. See [replace_character.md](replace_character.md).
+- **`wan_animate`** — Wan2.2 Animate Animation (Move) mode: pose-locked still + driving video; timeline Wan Animate / Extend Animate (`role=animate`). See [wan_animate.md](wan_animate.md).
+- **Replace Character (timeline)** — Segment → Depth → Character Reference → Pose Lock → Wan Animate. See [replace_character.md](replace_character.md).

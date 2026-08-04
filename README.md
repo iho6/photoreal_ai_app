@@ -119,7 +119,16 @@ photoreal character-inpaint --scene plate.png --mask mask.png --reference char.p
 
 ## Replace Character (timeline)
 
-Right-click clip/preview: **Segment** → **Depth** → **Character Reference** (gallery hover → inpaint) → **Pose Lock** (depth RefControl). Details: [docs/replace_character.md](docs/replace_character.md).
+Right-click clip/preview: **Segment** → **Depth** → **Character Reference** → **Pose Lock** → **Wan Animate**. Animate clips: **Extend Animate**. Details: [docs/replace_character.md](docs/replace_character.md), [docs/wan_animate.md](docs/wan_animate.md).
+
+## `wan_animate`
+
+Wan2.2 Animate **Animation (Move)** mode: pose-locked character + driving video → motion transfer. Output fps matches driving (prefer 24). Extend for long refs. Details: [docs/wan_animate.md](docs/wan_animate.md).
+
+```bash
+python scripts/download_models.py --wan-animate
+photoreal wan-animate --character pose_lock.png --video reference.mp4 -p "a person moving naturally"
+```
 
 ## Repo layout
 
@@ -130,7 +139,7 @@ Right-click clip/preview: **Segment** → **Depth** → **Character Reference** 
 | `launch.sh` / `launch.bat` | Stage-1 entry (Linux / Windows) |
 | `runtime/` | Pinned ComfyUI + BFL flux2 |
 | `data/` | Models / I/O / logs |
-| `scripts/download_models.py` | `--photoreal-gen`, `--vlm`, `--sam3`, `--depth`, `--character-depth`, `--all`, … |
+| `scripts/download_models.py` | `--photoreal-gen`, `--vlm`, `--sam3`, `--depth`, `--character-depth`, `--wan-animate`, `--all`, … |
 | `docs/` | Architecture + ability docs |
 
 ```bash

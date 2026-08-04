@@ -14,6 +14,7 @@ Usage (from repo root):
   python scripts/download_models.py --sam3
   python scripts/download_models.py --depth
   python scripts/download_models.py --character-depth
+  python scripts/download_models.py --wan-animate
   python scripts/download_models.py --vosk
   python scripts/download_models.py --all
   python scripts/download_models.py --all --loras-only
@@ -25,6 +26,7 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -46,7 +48,14 @@ LORAS_DIR = MODELS_ROOT / "loras"
 OPTIONAL_LORAS_DIR = LORAS_DIR / "optional"
 
 # Ability ids (CLI flags use dashes: --photoreal-gen, --vlm, --sam3, --depth)
-ABILITIES = ("photoreal_gen", "vlm", "sam3", "depth", "character_depth")
+ABILITIES = (
+    "photoreal_gen",
+    "vlm",
+    "sam3",
+    "depth",
+    "character_depth",
+    "wan_animate",
+)
 
 HF_VLM_REPO = "Qwen/Qwen3-VL-8B-Instruct"
 VLM_DIR = MODELS_ROOT / "vlm" / "Qwen3-VL-8B-Instruct"
@@ -67,6 +76,55 @@ DEPTH_CKPT = DEPTH_DIR / "depth_anything_3_mono_large.safetensors"
 HF_REFCONTROL_DEPTH_REPO = "thedeoxen/refcontrol-FLUX.2-klein-9B-reference-depth-lora"
 HF_REFCONTROL_DEPTH_FILE = "flux2_klein_9b_refcontrol_depth.safetensors"
 REFCONTROL_DEPTH_LORA = LORAS_DIR / HF_REFCONTROL_DEPTH_FILE
+
+# Wan2.2 Animate (Animation / Move mode) — FP8 economical path
+WAN_DIR = MODELS_ROOT / "wan"
+WAN_DIFFUSION_DIR = WAN_DIR / "diffusion_models"
+WAN_TEXT_ENCODERS_DIR = WAN_DIR / "text_encoders"
+WAN_VAE_DIR = WAN_DIR / "vae"
+WAN_CLIP_VISION_DIR = WAN_DIR / "clip_vision"
+WAN_LORAS_DIR = WAN_DIR / "loras"
+WAN_DETECTION_DIR = WAN_DIR / "detection"
+
+HF_WAN_DIFFUSION_REPO = "Kijai/WanVideo_comfy_fp8_scaled"
+HF_WAN_DIFFUSION_FILE = (
+    "Wan22Animate/Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors"
+)
+WAN_DIFFUSION_NAME = "Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors"
+WAN_DIFFUSION_PATH = WAN_DIFFUSION_DIR / WAN_DIFFUSION_NAME
+
+HF_WAN_STACK_REPO = "Comfy-Org/Wan_2.1_ComfyUI_repackaged"
+HF_WAN_TE_FILE = "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+WAN_TE_NAME = "umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+WAN_TE_PATH = WAN_TEXT_ENCODERS_DIR / WAN_TE_NAME
+HF_WAN_VAE_FILE = "split_files/vae/wan_2.1_vae.safetensors"
+WAN_VAE_NAME = "wan_2.1_vae.safetensors"
+WAN_VAE_PATH = WAN_VAE_DIR / WAN_VAE_NAME
+HF_WAN_CLIP_VISION_FILE = "split_files/clip_vision/clip_vision_h.safetensors"
+WAN_CLIP_VISION_NAME = "clip_vision_h.safetensors"
+WAN_CLIP_VISION_PATH = WAN_CLIP_VISION_DIR / WAN_CLIP_VISION_NAME
+
+HF_WAN_LORA_REPO = "Kijai/WanVideo_comfy"
+HF_WAN_LORA_FILE = (
+    "Lightx2v/lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors"
+)
+WAN_LORA_NAME = "lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors"
+WAN_LORA_PATH = WAN_LORAS_DIR / WAN_LORA_NAME
+
+HF_WAN_YOLO_REPO = "Wan-AI/Wan2.2-Animate-14B"
+HF_WAN_YOLO_FILE = "process_checkpoint/det/yolov10m.onnx"
+WAN_YOLO_NAME = "yolov10m.onnx"
+WAN_YOLO_PATH = WAN_DETECTION_DIR / WAN_YOLO_NAME
+
+HF_WAN_VITPOSE_REPO = "JunkyByte/easy_ViTPose"
+HF_WAN_VITPOSE_FILE = "onnx/wholebody/vitpose-l-wholebody.onnx"
+WAN_VITPOSE_NAME = "vitpose-l-wholebody.onnx"
+WAN_VITPOSE_PATH = WAN_DETECTION_DIR / WAN_VITPOSE_NAME
+
+WAN_PREPROCESS_REPO = "https://github.com/kijai/ComfyUI-WanAnimatePreprocess.git"
+WAN_PREPROCESS_DIR = (
+    REPO_ROOT / "runtime" / "comfyui" / "custom_nodes" / "ComfyUI-WanAnimatePreprocess"
+)
 
 # Local Vosk small EN (Record Reference Start/Stop — not an image ability)
 VOSK_MODEL_NAME = "vosk-model-small-en-us-0.15"
@@ -741,10 +799,112 @@ photoreal_sam3:
 photoreal_depth:
   base_path: {data.as_posix()}/
   geometry_estimation: models/depth_anything3/
+
+photoreal_wan:
+  base_path: {data.as_posix()}/
+  diffusion_models: models/wan/diffusion_models/
+  text_encoders: models/wan/text_encoders/
+  vae: models/wan/vae/
+  clip_vision: models/wan/clip_vision/
+  loras: models/wan/loras/
+  detection: models/wan/detection/
 """,
         encoding="utf-8",
     )
     print(f"Wrote {out}")
+
+
+def _hf_download_to(
+    *,
+    repo_id: str,
+    filename: str,
+    dest: Path,
+    token: str | None,
+    tqdm_cls: Any,
+    min_bytes: int = 1_000_000,
+) -> dict:
+    """Download one HF file into ``dest`` (flat), skipping if size looks ok."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.is_file() and dest.stat().st_size >= min_bytes:
+        print(f"  skip (exists, size ok): {dest.name} ({dest.stat().st_size} bytes)")
+        return {
+            "repo": repo_id,
+            "file": filename,
+            "path": str(dest.resolve().relative_to(REPO_ROOT)),
+            "bytes": dest.stat().st_size,
+            "skipped": True,
+        }
+
+    from huggingface_hub import hf_hub_download
+
+    print(f"  downloading {repo_id} / {filename}…")
+    downloaded = Path(
+        hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            local_dir=str(dest.parent),
+            token=token,
+            tqdm_class=tqdm_cls,
+        )
+    )
+    if downloaded.resolve() != dest.resolve() and downloaded.is_file():
+        if dest.exists():
+            dest.unlink()
+        shutil.move(str(downloaded), str(dest))
+        # Drop empty nesting left by hf_hub_download when possible
+        nested = dest.parent / Path(filename).parts[0]
+        if nested.is_dir() and nested != dest.parent and not any(nested.rglob("*")):
+            shutil.rmtree(nested, ignore_errors=True)
+    print(f"  -> {dest} ({dest.stat().st_size} bytes)")
+    return {
+        "repo": repo_id,
+        "file": filename,
+        "path": str(dest.resolve().relative_to(REPO_ROOT)),
+        "bytes": dest.stat().st_size,
+        "skipped": False,
+    }
+
+
+def _ensure_wan_preprocess_custom_node() -> dict:
+    """Clone ComfyUI-WanAnimatePreprocess into runtime custom_nodes if missing."""
+    if WAN_PREPROCESS_DIR.is_dir() and any(WAN_PREPROCESS_DIR.iterdir()):
+        print(f"  skip custom node (exists): {WAN_PREPROCESS_DIR}")
+        return {
+            "repo": WAN_PREPROCESS_REPO,
+            "path": str(WAN_PREPROCESS_DIR.resolve().relative_to(REPO_ROOT)),
+            "skipped": True,
+        }
+
+    WAN_PREPROCESS_DIR.parent.mkdir(parents=True, exist_ok=True)
+    print(f"  cloning {WAN_PREPROCESS_REPO} → {WAN_PREPROCESS_DIR}…")
+    try:
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                WAN_PREPROCESS_REPO,
+                str(WAN_PREPROCESS_DIR),
+            ],
+            check=True,
+            cwd=str(WAN_PREPROCESS_DIR.parent),
+        )
+    except (OSError, subprocess.CalledProcessError) as e:
+        raise SystemExit(
+            "Failed to clone ComfyUI-WanAnimatePreprocess. Install git and retry, "
+            f"or clone manually into {WAN_PREPROCESS_DIR}:\n"
+            f"  git clone --depth 1 {WAN_PREPROCESS_REPO} "
+            f'"{WAN_PREPROCESS_DIR}"\n'
+            f"Original error: {e}"
+        ) from e
+    print(f"  custom node -> {WAN_PREPROCESS_DIR}")
+    print("  NOTE: Restart ComfyUI after installing custom nodes.")
+    return {
+        "repo": WAN_PREPROCESS_REPO,
+        "path": str(WAN_PREPROCESS_DIR.resolve().relative_to(REPO_ROOT)),
+        "skipped": False,
+    }
 
 
 def download_photoreal_gen(
@@ -1088,6 +1248,130 @@ def download_character_depth() -> dict:
     return records
 
 
+def download_wan_animate() -> dict:
+    """Download Wan2.2 Animate FP8 stack + preprocess detection models + custom node."""
+    try:
+        from huggingface_hub import hf_hub_download  # noqa: F401
+
+        tqdm_cls = _enable_portal_hf_progress()
+    except ImportError as e:
+        raise SystemExit(
+            "huggingface_hub is required. pip install huggingface_hub"
+        ) from e
+
+    print("=== wan_animate: Wan2.2 Animate (Animation / Move mode) ===")
+    print(
+        "WARNING: ~20GB+ disk for core weights; FP8 path targets ~24GB-class VRAM. "
+        "Restart ComfyUI after custom node install."
+    )
+    token = _hf_token()
+    assets: list[dict] = []
+
+    for dest_dir in (
+        WAN_DIFFUSION_DIR,
+        WAN_TEXT_ENCODERS_DIR,
+        WAN_VAE_DIR,
+        WAN_CLIP_VISION_DIR,
+        WAN_LORAS_DIR,
+        WAN_DETECTION_DIR,
+    ):
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+    assets.append(
+        _hf_download_to(
+            repo_id=HF_WAN_DIFFUSION_REPO,
+            filename=HF_WAN_DIFFUSION_FILE,
+            dest=WAN_DIFFUSION_PATH,
+            token=token,
+            tqdm_cls=tqdm_cls,
+            min_bytes=1_000_000_000,
+        )
+    )
+    assets.append(
+        _hf_download_to(
+            repo_id=HF_WAN_STACK_REPO,
+            filename=HF_WAN_TE_FILE,
+            dest=WAN_TE_PATH,
+            token=token,
+            tqdm_cls=tqdm_cls,
+            min_bytes=1_000_000_000,
+        )
+    )
+    assets.append(
+        _hf_download_to(
+            repo_id=HF_WAN_STACK_REPO,
+            filename=HF_WAN_VAE_FILE,
+            dest=WAN_VAE_PATH,
+            token=token,
+            tqdm_cls=tqdm_cls,
+            min_bytes=50_000_000,
+        )
+    )
+    assets.append(
+        _hf_download_to(
+            repo_id=HF_WAN_STACK_REPO,
+            filename=HF_WAN_CLIP_VISION_FILE,
+            dest=WAN_CLIP_VISION_PATH,
+            token=token,
+            tqdm_cls=tqdm_cls,
+            min_bytes=50_000_000,
+        )
+    )
+    assets.append(
+        _hf_download_to(
+            repo_id=HF_WAN_LORA_REPO,
+            filename=HF_WAN_LORA_FILE,
+            dest=WAN_LORA_PATH,
+            token=token,
+            tqdm_cls=tqdm_cls,
+            min_bytes=10_000_000,
+        )
+    )
+    assets.append(
+        _hf_download_to(
+            repo_id=HF_WAN_YOLO_REPO,
+            filename=HF_WAN_YOLO_FILE,
+            dest=WAN_YOLO_PATH,
+            token=token,
+            tqdm_cls=tqdm_cls,
+            min_bytes=1_000_000,
+        )
+    )
+    assets.append(
+        _hf_download_to(
+            repo_id=HF_WAN_VITPOSE_REPO,
+            filename=HF_WAN_VITPOSE_FILE,
+            dest=WAN_VITPOSE_PATH,
+            token=token,
+            tqdm_cls=tqdm_cls,
+            min_bytes=1_000_000,
+        )
+    )
+
+    custom_node = _ensure_wan_preprocess_custom_node()
+
+    _write_local_comfy_paths()
+    records = {
+        "ability": "wan_animate",
+        "mode": "animation",
+        "downloaded_at": datetime.now(timezone.utc).isoformat(),
+        "assets": assets,
+        "custom_node": custom_node,
+        "notes": [
+            "Animation (Move) mode: pose-locked character still + driving video motion.",
+            "Not Replacement/Mix (no background_video / character_mask / SAM2 / relight).",
+            "Requires ComfyUI-WanAnimatePreprocess custom node + YOLO/ViTPose ONNX.",
+            "Default speed LoRA: lightx2v I2V 480p rank64 (4–6 steps, cfg~1).",
+            "Restart ComfyUI after first install so custom nodes and model paths load.",
+            "Use comfyui_extra_model_paths.yaml (photoreal_wan) or the generated .local.yaml.",
+        ],
+    }
+    manifest = MODELS_ROOT / "wan_animate_manifest.json"
+    manifest.write_text(json.dumps(records, indent=2), encoding="utf-8")
+    print(f"Wrote manifest {manifest}")
+    return records
+
+
 def download_vosk() -> dict:
     """Download + unpack Vosk small English model for local voice commands."""
     import io
@@ -1140,6 +1424,7 @@ ABILITY_DOWNLOADERS = {
     "sam3": download_sam3,
     "depth": download_depth,
     "character_depth": download_character_depth,
+    "wan_animate": download_wan_animate,
 }
 
 
@@ -1154,6 +1439,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  --sam3            SAM 3.1 multiplex checkpoint (Comfy SAM3_Detect)\n"
             "  --depth           Depth Anything 3 mono large (depth_subject)\n"
             "  --character-depth RefControl depth LoRA (character_depth)\n"
+            "  --wan-animate     Wan2.2 Animate FP8 + preprocess (Animation mode)\n"
             "  --vosk            Vosk small EN (local Record Reference Start/Stop)\n"
             "  --all             Every registered ability\n"
         ),
@@ -1183,6 +1469,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--character-depth",
         action="store_true",
         help="Download RefControl depth LoRA for character_depth",
+    )
+    ability.add_argument(
+        "--wan-animate",
+        action="store_true",
+        help="Download Wan2.2 Animate FP8 stack + preprocess for wan_animate",
     )
     ability.add_argument(
         "--all",
@@ -1228,6 +1519,8 @@ def selected_abilities(args: argparse.Namespace) -> list[str]:
         chosen.append("depth")
     if args.character_depth:
         chosen.append("character_depth")
+    if args.wan_animate:
+        chosen.append("wan_animate")
     return chosen
 
 
@@ -1239,7 +1532,7 @@ def main(argv: list[str] | None = None) -> None:
         parser.error(
             "Select at least one ability flag "
             "(e.g. --photoreal-gen, --vlm, --sam3, --depth, --character-depth, "
-            "--vosk) or --all"
+            "--wan-animate, --vosk) or --all"
         )
     if args.loras_only and args.hf_only:
         parser.error("Use only one of --loras-only / --hf-only")

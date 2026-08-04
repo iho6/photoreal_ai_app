@@ -42,6 +42,23 @@
       backdropClipId: c.backdropClipId || null,
       poseLockUrl: c.poseLockUrl || null,
       showPoseLock: !!c.showPoseLock,
+      sourceClipId: c.sourceClipId || null,
+      drivingVideoSrc: c.drivingVideoSrc || null,
+      characterStillUrl: c.characterStillUrl || null,
+      videoFrameOffset:
+        c.videoFrameOffset == null ? null : Math.max(0, Math.floor(Number(c.videoFrameOffset))),
+      wanLength:
+        c.wanLength == null ? null : Math.max(0, Math.floor(Number(c.wanLength))),
+      wanFps: c.wanFps == null ? null : Number(c.wanFps),
+      drivingFrameCount:
+        c.drivingFrameCount == null
+          ? null
+          : Math.max(0, Math.floor(Number(c.drivingFrameCount))),
+      continueMotionMaxFrames:
+        c.continueMotionMaxFrames == null
+          ? null
+          : Math.max(1, Math.floor(Number(c.continueMotionMaxFrames))),
+      wanPrompt: c.wanPrompt || null,
     };
   }
 
@@ -209,6 +226,123 @@
     var existing = findLocationsTrack(state);
     if (existing) return existing;
     return addTrack(state, "Locations");
+  }
+
+  function findAnimateTrack(state) {
+    for (var i = 0; i < state.tracks.length; i++) {
+      if (state.tracks[i].name === "Animate") return state.tracks[i];
+    }
+    return null;
+  }
+
+  function ensureAnimateTrack(state) {
+    var existing = findAnimateTrack(state);
+    if (existing) return existing;
+    return addTrack(state, "Animate");
+  }
+
+  /**
+   * Place a Wan Animate output clip on the Animate track (role=animate).
+   * meta.src required (URL). Optional: start, duration, wan* fields.
+   */
+  function addAnimateClip(state, meta) {
+    meta = meta || {};
+    if (!meta.src) {
+      return Promise.reject(new Error("Animate clip requires src"));
+    }
+    var hinted = Number(meta.duration);
+    var durPromise;
+    if (isFinite(hinted) && hinted > 0) {
+      durPromise = Promise.resolve(Math.max(MIN_CLIP_DURATION, hinted));
+    } else if (
+      isFinite(Number(meta.wanLength)) &&
+      Number(meta.wanLength) > 0 &&
+      isFinite(Number(meta.wanFps)) &&
+      Number(meta.wanFps) > 0
+    ) {
+      durPromise = Promise.resolve(
+        Math.max(MIN_CLIP_DURATION, Number(meta.wanLength) / Number(meta.wanFps))
+      );
+    } else {
+      durPromise = new Promise(function (resolve) {
+        var el = document.createElement("video");
+        el.preload = "metadata";
+        var done = false;
+        function finish(d) {
+          if (done) return;
+          done = true;
+          var v = Number(d);
+          if (!isFinite(v) || v <= 0) v = IMAGE_DEFAULT_DURATION;
+          resolve(Math.max(MIN_CLIP_DURATION, v));
+        }
+        el.onloadedmetadata = function () {
+          finish(el.duration);
+        };
+        el.onerror = function () {
+          finish(IMAGE_DEFAULT_DURATION);
+        };
+        el.src = meta.src;
+      });
+    }
+
+    return durPromise.then(function (dur) {
+      pushUndo(state);
+      var track = findAnimateTrack(state);
+      if (!track) {
+        track = {
+          id: uid("trk"),
+          name: "Animate",
+          locked: false,
+          hidden: false,
+          height: 64,
+        };
+        state.tracks.push(track);
+      }
+      if (track.locked) {
+        emit(state);
+        return null;
+      }
+      var start = Number(meta.start);
+      if (!isFinite(start) || start < 0) start = Math.max(0, state.playhead);
+      var clipDur = Math.max(MIN_CLIP_DURATION, dur);
+      var clip = {
+        id: uid("clip"),
+        trackId: track.id,
+        name: meta.name || "Animate",
+        mediaType: "video",
+        src: meta.src,
+        start: start,
+        duration: clipDur,
+        inPoint: 0,
+        sourceDuration: clipDur,
+        role: "animate",
+        sourceClipId: meta.sourceClipId || null,
+        drivingVideoSrc: meta.drivingVideoSrc || null,
+        characterStillUrl: meta.characterStillUrl || null,
+        videoFrameOffset:
+          meta.videoFrameOffset == null
+            ? 0
+            : Math.max(0, Math.floor(Number(meta.videoFrameOffset))),
+        wanLength:
+          meta.wanLength == null
+            ? null
+            : Math.max(0, Math.floor(Number(meta.wanLength))),
+        wanFps: meta.wanFps == null ? null : Number(meta.wanFps),
+        drivingFrameCount:
+          meta.drivingFrameCount == null
+            ? null
+            : Math.max(0, Math.floor(Number(meta.drivingFrameCount))),
+        continueMotionMaxFrames:
+          meta.continueMotionMaxFrames == null
+            ? 5
+            : Math.max(1, Math.floor(Number(meta.continueMotionMaxFrames))),
+        wanPrompt: meta.wanPrompt || null,
+      };
+      state.clips.push(clip);
+      state.selection = { trackId: clip.trackId, clipId: clip.id };
+      emit(state);
+      return clip;
+    });
   }
 
   function probeMediaDuration(file, mediaType) {
@@ -779,7 +913,9 @@
     addTrack: addTrack,
     ensureReferencesTrack: ensureReferencesTrack,
     ensureLocationsTrack: ensureLocationsTrack,
+    ensureAnimateTrack: ensureAnimateTrack,
     addReferenceClip: addReferenceClip,
+    addAnimateClip: addAnimateClip,
     nextRefSlot: nextRefSlot,
     addLocationClipsFromFiles: addLocationClipsFromFiles,
     setPlayhead: setPlayhead,

@@ -119,9 +119,13 @@ def test_download_models_cli_flags() -> None:
         "photoreal_gen",
         "vlm",
         "sam3",
+        "depth",
+        "character_depth",
+        "wan_animate",
     ]
     assert "vlm" in mod.ABILITY_DOWNLOADERS
     assert "sam3" in mod.ABILITY_DOWNLOADERS
+    assert "wan_animate" in mod.ABILITY_DOWNLOADERS
     assert mod.HF_VLM_REPO == "Qwen/Qwen3-VL-8B-Instruct"
     assert mod.HF_SAM3_REPO == "Comfy-Org/sam3.1"
 

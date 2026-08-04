@@ -20,6 +20,7 @@ from photoreal.portal import character_pose_lock_jobs
 from photoreal.portal import depth_jobs
 from photoreal.portal import sam3_jobs
 from photoreal.portal import voice_vosk
+from photoreal.portal import wan_animate_jobs
 from photoreal.portal.credentials import load_credentials, save_credentials
 from photoreal.portal.paths import WEB_ROOT
 from photoreal.portal.supervisor import dry_run_commands, health_snapshot
@@ -436,6 +437,86 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="job not found")
         return job
 
+    @app.post("/api/wan-animate")
+    async def wan_animate(
+        character: UploadFile = File(...),
+        video: UploadFile = File(...),
+        continue_motion: UploadFile | None = File(None),
+        prompt: str = Form("a person moving naturally, photorealistic"),
+        length: int = Form(77),
+        offset: int = Form(0),
+        fps: float | None = Form(None),
+        driving_frame_count: int | None = Form(None),
+        continue_motion_max_frames: int = Form(5),
+        width: int = Form(832),
+        height: int = Form(480),
+        comfy_url: str | None = Form(None),
+    ) -> dict[str, Any]:
+        """Enqueue Wan Animate chunk (multipart: character still + driving video)."""
+        import tempfile
+
+        char_suf = Path(character.filename or "character.png").suffix or ".png"
+        vid_suf = Path(video.filename or "driving.mp4").suffix or ".mp4"
+        char_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=char_suf)
+        vid_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=vid_suf)
+        cont_tmp = None
+        try:
+            char_data = await character.read()
+            vid_data = await video.read()
+            if not char_data:
+                raise HTTPException(status_code=400, detail="empty character upload")
+            if not vid_data:
+                raise HTTPException(status_code=400, detail="empty video upload")
+            char_tmp.write(char_data)
+            char_tmp.close()
+            vid_tmp.write(vid_data)
+            vid_tmp.close()
+            cont_path = None
+            if continue_motion is not None and continue_motion.filename:
+                cont_data = await continue_motion.read()
+                if cont_data:
+                    cont_suf = (
+                        Path(continue_motion.filename or "continue.mp4").suffix
+                        or ".mp4"
+                    )
+                    cont_tmp = tempfile.NamedTemporaryFile(
+                        delete=False, suffix=cont_suf
+                    )
+                    cont_tmp.write(cont_data)
+                    cont_tmp.close()
+                    cont_path = Path(cont_tmp.name)
+            return wan_animate_jobs.start_wan_animate(
+                character_path=Path(char_tmp.name),
+                driving_path=Path(vid_tmp.name),
+                continue_motion_path=cont_path,
+                prompt=prompt,
+                length=length,
+                offset=offset,
+                fps=fps,
+                driving_frame_count=driving_frame_count,
+                continue_motion_max_frames=continue_motion_max_frames,
+                width=width,
+                height=height,
+                comfy_url=comfy_url or None,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        finally:
+            for tmp in (char_tmp, vid_tmp, cont_tmp):
+                if tmp is None:
+                    continue
+                try:
+                    Path(tmp.name).unlink(missing_ok=True)
+                except Exception:  # noqa: BLE001
+                    pass
+
+    @app.get("/api/wan-animate/jobs/{job_id}")
+    def wan_animate_job(job_id: str) -> dict[str, Any]:
+        job = wan_animate_jobs.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="job not found")
+        return job
+
     @app.get("/api/voice/status")
     def voice_status() -> dict[str, Any]:
         return voice_vosk.status()
@@ -527,6 +608,7 @@ def create_app() -> FastAPI:
     )
     character_inpaint_jobs.ensure_inpaint_dir()
     character_pose_lock_jobs.ensure_pose_lock_dir()
+    wan_animate_jobs.ensure_wan_animate_dir()
     app.mount(
         "/inpaint-outputs",
         StaticFiles(directory=str(character_inpaint_jobs.INPAINT_DIR)),
@@ -536,6 +618,11 @@ def create_app() -> FastAPI:
         "/pose-lock-outputs",
         StaticFiles(directory=str(character_pose_lock_jobs.POSE_LOCK_DIR)),
         name="pose_lock_outputs",
+    )
+    app.mount(
+        "/wan-animate-outputs",
+        StaticFiles(directory=str(wan_animate_jobs.WAN_ANIMATE_DIR)),
+        name="wan_animate_outputs",
     )
 
     return app

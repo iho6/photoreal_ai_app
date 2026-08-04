@@ -69,7 +69,7 @@ class ComfyClient:
         subfolder: str = "photoreal_sam3_inputs",
         overwrite: bool = True,
     ) -> str:
-        """Upload a local image to ComfyUI input; return LoadImage ``image`` ref."""
+        """Upload a local image/video to ComfyUI input; return LoadImage/LoadVideo ref."""
         src = Path(path)
         if not src.is_file():
             raise ComfyClientError(f"Image not found: {src}")
@@ -94,8 +94,22 @@ class ComfyClient:
             return f"{sub}/{name}".replace("\\", "/")
         return name
 
+    def upload_video(
+        self,
+        path: str | Path,
+        *,
+        subfolder: str = "",
+        overwrite: bool = True,
+    ) -> str:
+        """Upload a local video via ``/upload/image`` (Comfy accepts video there)."""
+        return self.upload_image(path, subfolder=subfolder, overwrite=overwrite)
+
     def run_workflow(self, prompt: dict[str, Any]) -> list[tuple[str, bytes]]:
-        """Queue workflow, wait, return list of (filename, png_bytes)."""
+        """Queue workflow, wait, return list of (filename, bytes) from history images.
+
+        Note: SaveVideo PreviewVideo entries are also stored under ``images``
+        (including ``.mp4``); callers may filter by extension.
+        """
         prompt_id = self.queue_prompt(prompt)
         hist = self.wait_history(prompt_id)
         outputs = hist.get("outputs") or {}
@@ -109,9 +123,17 @@ class ComfyClient:
                     folder_type=img.get("type") or "output",
                 )
                 images.append((name, data))
+            for vid in node_out.get("videos") or []:
+                name = vid["filename"]
+                data = self.download_image(
+                    name,
+                    subfolder=vid.get("subfolder") or "",
+                    folder_type=vid.get("type") or "output",
+                )
+                images.append((name, data))
         if not images:
             raise ComfyClientError(
-                f"No images in history for {prompt_id}: {json.dumps(hist)[:500]}"
+                f"No images/videos in history for {prompt_id}: {json.dumps(hist)[:500]}"
             )
         return images
 

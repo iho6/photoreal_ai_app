@@ -251,6 +251,39 @@
       } else {
         menu.appendChild(menuItemDisabled("Pose Lock"));
       }
+
+      if (clip.poseLockUrl && clip.src && clip.mediaType === "video") {
+        menu.appendChild(
+          menuItem("Wan Animate", function () {
+            runWanAnimate(clip);
+          })
+        );
+      } else {
+        menu.appendChild(menuItemDisabled("Wan Animate"));
+      }
+    }
+
+    function appendAnimateMenuItems(menu, clip) {
+      var offset = (clip.videoFrameOffset || 0) + (clip.wanLength || 0);
+      var total = clip.drivingFrameCount;
+      var remaining =
+        total != null && isFinite(Number(total))
+          ? Math.max(0, Math.floor(Number(total)) - offset)
+          : null;
+      var canExtend =
+        clip.drivingVideoSrc &&
+        clip.characterStillUrl &&
+        clip.src &&
+        (remaining == null || remaining > 0);
+      if (canExtend) {
+        menu.appendChild(
+          menuItem("Extend Animate", function () {
+            runExtendAnimate(clip);
+          })
+        );
+      } else {
+        menu.appendChild(menuItemDisabled("Extend Animate"));
+      }
     }
 
     function buildCharacterReferenceItem(clip) {
@@ -866,6 +899,264 @@
         });
     }
 
+    function clampWanLength(requested, remaining) {
+      var n = Math.min(Math.max(1, Math.floor(Number(requested) || 77)), 77);
+      if (remaining != null && isFinite(Number(remaining))) {
+        n = Math.min(n, Math.max(0, Math.floor(Number(remaining))));
+      }
+      if (n <= 0) return 0;
+      return Math.max(1, Math.floor((n - 1) / 4) * 4 + 1);
+    }
+
+    function probeVideoMeta(src) {
+      return new Promise(function (resolve) {
+        var el = document.createElement("video");
+        el.preload = "metadata";
+        var done = false;
+        function finish(fps, frames) {
+          if (done) return;
+          done = true;
+          resolve({ fps: fps, frames: frames });
+        }
+        el.onloadedmetadata = function () {
+          var dur = el.duration;
+          var fps = state.fps > 0 ? state.fps : 24;
+          if (isFinite(dur) && dur > 0) {
+            finish(fps, Math.max(1, Math.round(dur * fps)));
+            return;
+          }
+          finish(24, null);
+        };
+        el.onerror = function () {
+          finish(24, null);
+        };
+        el.src = src;
+      });
+    }
+
+    function pollWanAnimateJob(jobId) {
+      return pollJob(
+        "/api/wan-animate/jobs/" + encodeURIComponent(jobId),
+        "Wan Animate",
+        720
+      );
+    }
+
+    function postWanAnimate(opts) {
+      var fd = new FormData();
+      fd.append("character", opts.characterBlob, "character.png");
+      fd.append("video", opts.drivingBlob, opts.drivingName || "driving.mp4");
+      if (opts.continueBlob) {
+        fd.append(
+          "continue_motion",
+          opts.continueBlob,
+          opts.continueName || "continue.mp4"
+        );
+      }
+      fd.append(
+        "prompt",
+        opts.prompt || "a person moving naturally, photorealistic"
+      );
+      fd.append("length", String(opts.length || 77));
+      fd.append("offset", String(opts.offset || 0));
+      if (opts.fps != null && isFinite(opts.fps)) {
+        fd.append("fps", String(opts.fps));
+      }
+      if (opts.drivingFrameCount != null && isFinite(opts.drivingFrameCount)) {
+        fd.append("driving_frame_count", String(opts.drivingFrameCount));
+      }
+      fd.append(
+        "continue_motion_max_frames",
+        String(opts.continueMotionMaxFrames || 5)
+      );
+      return fetch("/api/wan-animate", { method: "POST", body: fd }).then(
+        function (r) {
+          return r.json().then(function (j) {
+            if (!r.ok) throw new Error(j.detail || r.statusText);
+            return j;
+          });
+        }
+      );
+    }
+
+    function placeAnimateFromJob(job, placeMeta) {
+      var urls = (job && job.videos) || [];
+      if (!urls.length) throw new Error("Wan Animate finished with no video");
+      var fps = job.fps || job.wanFps || placeMeta.wanFps || 24;
+      var length = job.length != null ? job.length : placeMeta.wanLength;
+      var trim =
+        job.meta && job.meta.trim_image != null
+          ? Number(job.meta.trim_image)
+          : 0;
+      var outFrames =
+        length != null ? Math.max(1, Number(length) - (trim || 0)) : null;
+      var duration =
+        outFrames != null && fps > 0 ? outFrames / Number(fps) : null;
+      return M.addAnimateClip(state, {
+        src: urls[0],
+        name: placeMeta.name || "Animate",
+        start: placeMeta.start,
+        duration: duration,
+        sourceClipId: placeMeta.sourceClipId,
+        drivingVideoSrc: placeMeta.drivingVideoSrc,
+        characterStillUrl: placeMeta.characterStillUrl,
+        videoFrameOffset:
+          job.video_frame_offset != null
+            ? job.video_frame_offset
+            : placeMeta.videoFrameOffset,
+        wanLength: length,
+        wanFps: fps,
+        drivingFrameCount:
+          job.driving_frame_count != null
+            ? job.driving_frame_count
+            : placeMeta.drivingFrameCount,
+        continueMotionMaxFrames: placeMeta.continueMotionMaxFrames || 5,
+        wanPrompt: placeMeta.wanPrompt,
+      });
+    }
+
+    function runWanAnimate(clip) {
+      if (!clip || !clip.poseLockUrl || !clip.src) {
+        window.alert("Need Pose Lock and a video clip.");
+        return;
+      }
+      var prompt =
+        window.prompt(
+          "Wan Animate prompt",
+          "a person moving naturally, photorealistic"
+        ) || "";
+      prompt =
+        String(prompt).trim() || "a person moving naturally, photorealistic";
+
+      Promise.all([
+        fetchUrlBlob(clip.poseLockUrl),
+        fetchUrlBlob(clip.src),
+        probeVideoMeta(clip.src),
+      ])
+        .then(function (triple) {
+          var charBlob = triple[0];
+          var driveBlob = triple[1];
+          var meta = triple[2] || {};
+          var frames = meta.frames;
+          var fps = meta.fps || state.fps || 24;
+          var length = clampWanLength(77, frames);
+          if (length <= 0) {
+            throw new Error("Driving video has no frames");
+          }
+          return postWanAnimate({
+            characterBlob: charBlob,
+            drivingBlob: driveBlob,
+            drivingName: "driving.mp4",
+            prompt: prompt,
+            length: length,
+            offset: 0,
+            fps: fps,
+            drivingFrameCount: frames,
+            continueMotionMaxFrames: 5,
+          }).then(function (started) {
+            if (!started.job_id) throw new Error("No job_id from wan-animate");
+            return pollWanAnimateJob(started.job_id).then(function (job) {
+              return placeAnimateFromJob(job, {
+                name: "Animate",
+                start: clip.start,
+                sourceClipId: clip.id,
+                drivingVideoSrc: clip.src,
+                characterStillUrl: clip.poseLockUrl,
+                videoFrameOffset: 0,
+                wanLength: length,
+                wanFps: fps,
+                drivingFrameCount: frames,
+                continueMotionMaxFrames: 5,
+                wanPrompt: prompt,
+              });
+            });
+          });
+        })
+        .catch(function (e) {
+          window.alert("Wan Animate failed: " + (e.message || e));
+        });
+    }
+
+    function runExtendAnimate(clip) {
+      if (
+        !clip ||
+        clip.role !== "animate" ||
+        !clip.drivingVideoSrc ||
+        !clip.characterStillUrl ||
+        !clip.src
+      ) {
+        window.alert(
+          "Extend requires an Animate clip with stored driving/still refs."
+        );
+        return;
+      }
+      var nextOffset = (clip.videoFrameOffset || 0) + (clip.wanLength || 0);
+      var prompt =
+        clip.wanPrompt || "a person moving naturally, photorealistic";
+
+      var metaPromise =
+        clip.drivingFrameCount != null && clip.wanFps != null
+          ? Promise.resolve({
+              frames: clip.drivingFrameCount,
+              fps: clip.wanFps,
+            })
+          : probeVideoMeta(clip.drivingVideoSrc);
+
+      metaPromise
+        .then(function (meta) {
+          var frames =
+            clip.drivingFrameCount != null
+              ? clip.drivingFrameCount
+              : meta.frames;
+          var fps = clip.wanFps || meta.fps || state.fps || 24;
+          var remaining =
+            frames != null ? Math.max(0, frames - nextOffset) : 77;
+          var length = clampWanLength(77, remaining);
+          if (length <= 0) {
+            throw new Error("No remaining driving frames to extend");
+          }
+          return Promise.all([
+            fetchUrlBlob(clip.characterStillUrl),
+            fetchUrlBlob(clip.drivingVideoSrc),
+            fetchUrlBlob(clip.src),
+          ]).then(function (triple) {
+            return postWanAnimate({
+              characterBlob: triple[0],
+              drivingBlob: triple[1],
+              drivingName: "driving.mp4",
+              continueBlob: triple[2],
+              continueName: "continue.mp4",
+              prompt: prompt,
+              length: length,
+              offset: nextOffset,
+              fps: fps,
+              drivingFrameCount: frames,
+              continueMotionMaxFrames: clip.continueMotionMaxFrames || 5,
+            }).then(function (started) {
+              if (!started.job_id) throw new Error("No job_id from wan-animate");
+              return pollWanAnimateJob(started.job_id).then(function (job) {
+                return placeAnimateFromJob(job, {
+                  name: "Animate extend",
+                  start: clip.start + clip.duration,
+                  sourceClipId: clip.sourceClipId,
+                  drivingVideoSrc: clip.drivingVideoSrc,
+                  characterStillUrl: clip.characterStillUrl,
+                  videoFrameOffset: nextOffset,
+                  wanLength: length,
+                  wanFps: fps,
+                  drivingFrameCount: frames,
+                  continueMotionMaxFrames: clip.continueMotionMaxFrames || 5,
+                  wanPrompt: prompt,
+                });
+              });
+            });
+          });
+        })
+        .catch(function (e) {
+          window.alert("Extend Animate failed: " + (e.message || e));
+        });
+    }
+
     function showClipMenu(clientX, clientY, clipId) {
       dismissMenu();
       var clip = M.findClip(state, clipId);
@@ -873,7 +1164,11 @@
       menuEl = document.createElement("div");
       menuEl.className = "nle-menu";
       menuEl.setAttribute("role", "menu");
-      appendReplaceCharacterMenuItems(menuEl, clip);
+      if (clip.role === "animate") {
+        appendAnimateMenuItems(menuEl, clip);
+      } else {
+        appendReplaceCharacterMenuItems(menuEl, clip);
+      }
       placeMenu(clientX, clientY);
     }
 
@@ -884,7 +1179,11 @@
       menuEl = document.createElement("div");
       menuEl.className = "nle-menu";
       menuEl.setAttribute("role", "menu");
-      appendReplaceCharacterMenuItems(menuEl, clip);
+      if (clip.role === "animate") {
+        appendAnimateMenuItems(menuEl, clip);
+      } else {
+        appendReplaceCharacterMenuItems(menuEl, clip);
+      }
       placeMenu(clientX, clientY);
     }
 
