@@ -64,6 +64,7 @@ def test_assert_generate_env_runpod_ok_without_cached_endpoint(
     )
     monkeypatch.setattr(creds, "ENV_PATH", env_path)
     monkeypatch.setattr(backend, "torch_cuda_available", lambda: False)
+    monkeypatch.setattr(env_check, "maybe_ensure_cuda_torch", lambda log=None: False)
     info = env_check.assert_generate_env()
     assert info["backend"] == "runpod"
     assert info.get("endpoint_id") in (None, "")
@@ -82,8 +83,228 @@ def test_assert_generate_env_fails_without_key_or_cuda(
     monkeypatch.delenv("RUNPOD_API_KEY", raising=False)
     monkeypatch.delenv("FLASH_CHARACTER_ENDPOINT", raising=False)
     monkeypatch.setattr(backend, "torch_cuda_available", lambda: False)
+    monkeypatch.setattr(env_check, "maybe_ensure_cuda_torch", lambda log=None: False)
     with pytest.raises(RuntimeError, match="Runpod Flash"):
         env_check.assert_generate_env()
+
+
+def test_needs_cuda_torch_reinstall(monkeypatch: pytest.MonkeyPatch) -> None:
+    import photoreal.portal.torch_cuda as tc
+
+    monkeypatch.setattr(tc, "nvidia_smi_ok", lambda: False)
+    assert tc.needs_cuda_torch_reinstall({"available": False, "cuda_version": None}) is False
+
+    monkeypatch.setattr(tc, "nvidia_smi_ok", lambda: True)
+    assert tc.needs_cuda_torch_reinstall({"available": False, "version": "2.x+cpu", "cuda_version": None}) is True
+    assert tc.needs_cuda_torch_reinstall({"available": True, "cuda_version": "12.4"}) is True
+    assert tc.needs_cuda_torch_reinstall({"available": True, "cuda_version": "12.8"}) is False
+    assert (
+        tc.needs_cuda_torch_reinstall(
+            {"available": True, "version": "2.11.0+cu128", "cuda_version": "12.8"}
+        )
+        is False
+    )
+
+
+def test_describe_and_format_torch_diag(monkeypatch: pytest.MonkeyPatch) -> None:
+    import photoreal.portal.torch_cuda as tc
+
+    info = {
+        "available": False,
+        "version": "2.6.0+cpu",
+        "cuda_version": None,
+        "device_count": 0,
+        "device_name": None,
+        "error": None,
+    }
+    monkeypatch.setattr(tc, "describe_torch_cuda", lambda: info)
+    text = tc.format_torch_diag(info)
+    assert "2.6.0+cpu" in text
+    assert "available=false" in text
+
+
+def test_maybe_ensure_skips_when_venv_already_cu128(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import photoreal.portal.env_check as env_check
+
+    ensure_calls = {"n": 0}
+    logs: list[str] = []
+
+    monkeypatch.setattr("photoreal.portal.torch_cuda.nvidia_smi_ok", lambda: True)
+    monkeypatch.setattr(
+        env_check,
+        "describe_torch_cuda",
+        lambda: {
+            "available": False,
+            "version": "2.13.0+cpu",
+            "cuda_version": None,
+            "device_count": 0,
+            "device_name": None,
+            "error": None,
+        },
+    )
+    monkeypatch.setattr(
+        "photoreal.portal.torch_cuda.format_torch_diag",
+        lambda info=None: "torch=2.13.0+cpu cuda_build=none available=false gpu=-",
+    )
+    monkeypatch.setattr(
+        "photoreal.portal.torch_cuda.venv_torch_needs_reinstall",
+        lambda python=None: (
+            False,
+            {
+                "version": "2.11.0+cu128",
+                "cuda_version": "12.8",
+                "available": True,
+                "error": None,
+            },
+        ),
+    )
+
+    def boom(**kwargs):
+        ensure_calls["n"] += 1
+        raise AssertionError("ensure_cuda_torch must not run when venv already has cu128")
+
+    monkeypatch.setattr("photoreal.portal.torch_cuda.ensure_cuda_torch", boom)
+    env_check.clear_torch_cuda_cache()
+    assert env_check.maybe_ensure_cuda_torch(log=logs.append) is True
+    assert ensure_calls["n"] == 0
+    assert env_check.torch_cuda_available() is True
+    assert any("skip reinstall" in line for line in logs)
+    assert any("2.11.0+cu128" in line for line in logs)
+
+
+def test_maybe_ensure_installs_when_venv_still_cpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import photoreal.portal.env_check as env_check
+
+    ensure_calls = {"n": 0}
+    logs: list[str] = []
+
+    monkeypatch.setattr("photoreal.portal.torch_cuda.nvidia_smi_ok", lambda: True)
+    monkeypatch.setattr(
+        env_check,
+        "describe_torch_cuda",
+        lambda: {
+            "available": False,
+            "version": "2.13.0+cpu",
+            "cuda_version": None,
+            "device_count": 0,
+            "device_name": None,
+            "error": None,
+        },
+    )
+    monkeypatch.setattr(
+        "photoreal.portal.torch_cuda.format_torch_diag",
+        lambda info=None: "torch=2.13.0+cpu cuda_build=none available=false gpu=-",
+    )
+    monkeypatch.setattr(
+        "photoreal.portal.torch_cuda.venv_torch_needs_reinstall",
+        lambda python=None: (
+            True,
+            {
+                "version": "2.13.0+cpu",
+                "cuda_version": None,
+                "available": False,
+                "error": None,
+            },
+        ),
+    )
+
+    def fake_ensure(**kwargs):
+        ensure_calls["n"] += 1
+        return True
+
+    monkeypatch.setattr("photoreal.portal.torch_cuda.ensure_cuda_torch", fake_ensure)
+    env_check.clear_torch_cuda_cache()
+    assert env_check.maybe_ensure_cuda_torch(log=logs.append) is True
+    assert ensure_calls["n"] == 1
+    assert any("installing cu128" in line for line in logs)
+
+
+def test_ensure_cuda_torch_uninstalls_then_force_reinstall(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import photoreal.portal.torch_cuda as tc
+
+    calls: list[list[str]] = []
+
+    class FakeCompleted:
+        def __init__(self, code: int = 0, stdout: str = "", stderr: str = ""):
+            self.returncode = code
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        joined = " ".join(cmd)
+        if "uninstall" in joined:
+            return FakeCompleted(0, stdout="Successfully uninstalled torch")
+        if "install" in joined:
+            return FakeCompleted(0, stdout="Successfully installed torch-2.7.0+cu128")
+        return FakeCompleted(0)
+
+    monkeypatch.setattr(tc, "nvidia_smi_ok", lambda: True)
+    monkeypatch.setattr(tc, "needs_cuda_torch_reinstall", lambda info=None: True)
+    monkeypatch.setattr(tc.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        tc,
+        "probe_torch_build_subprocess",
+        lambda python=None: {
+            "version": "2.7.0+cu128",
+            "cuda_version": "12.8",
+            "available": True,
+            "error": None,
+        },
+    )
+    logs: list[str] = []
+    assert tc.ensure_cuda_torch(python="python", log=logs.append, force=True) is True
+    assert any("uninstall" in " ".join(c) for c in calls)
+    assert any("--force-reinstall" in c for c in calls)
+    assert any(tc.CU128_INDEX in c for c in calls)
+    assert any("force-installing" in line or "uninstalling" in line for line in logs)
+
+
+def test_ensure_cuda_torch_rejects_still_cpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import photoreal.portal.torch_cuda as tc
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = "Requirement already satisfied: torch"
+        stderr = ""
+
+    monkeypatch.setattr(tc, "nvidia_smi_ok", lambda: True)
+    monkeypatch.setattr(tc, "needs_cuda_torch_reinstall", lambda info=None: True)
+    monkeypatch.setattr(tc.subprocess, "run", lambda *a, **k: FakeCompleted())
+    monkeypatch.setattr(
+        tc,
+        "probe_torch_build_subprocess",
+        lambda python=None: {
+            "version": "2.13.0+cpu",
+            "cuda_version": None,
+            "available": False,
+            "error": None,
+        },
+    )
+    logs: list[str] = []
+    assert tc.ensure_cuda_torch(python="python", log=logs.append, force=True) is False
+    assert any("cu128 wheel not installed" in line and "+cpu" in line for line in logs)
+
+
+def test_looks_like_cpu_and_cu128() -> None:
+    from photoreal.portal.torch_cuda import (
+        _looks_like_cpu_torch,
+        _looks_like_cu128_torch,
+    )
+
+    assert _looks_like_cpu_torch("2.13.0+cpu") is True
+    assert _looks_like_cu128_torch("2.13.0+cpu", None) is False
+    assert _looks_like_cu128_torch("2.7.0+cu128", "12.8") is True
+    assert _looks_like_cu128_torch("2.7.0", "12.8") is True
+    assert _looks_like_cu128_torch("2.7.0", "12.4") is False
 
 
 def test_resolve_ignores_terminal_runpod_env(
@@ -279,6 +500,9 @@ def test_volume_models_complete_detects_gaps(tmp_path: Path) -> None:
     comfy.mkdir(parents=True)
     (comfy / "main.py").write_text("#", encoding="utf-8")
     (tmp_path / "comfyui_extra_model_paths.yaml").write_text("x: 1\n", encoding="utf-8")
+
+    assert not volume_models_complete(tmp_path)
+    _sized(te / "qwen_3_8b.safetensors", 1_000_000_001)
 
     assert volume_models_complete(tmp_path)
     assert volume_missing_parts(tmp_path) == []

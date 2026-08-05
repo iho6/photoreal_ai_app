@@ -35,8 +35,8 @@
     "inputs": {
       "da3_geometry": ["3", 0],
       "output": "depth",
-      "normalization": "v2_style",
-      "apply_sky_clip": false
+      "output.normalization": "v2_style",
+      "output.apply_sky_clip": false
     },
     "class_type": "DA3Render",
     "_meta": {

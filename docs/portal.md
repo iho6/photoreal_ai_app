@@ -23,10 +23,39 @@ Opens `http://127.0.0.1:8010/` — enter **HF token** and **Runpod API key** (au
 
 ## Stages
 
-1. **Stage 1 (script):** create `.venv`, `pip install -e ".[portal]"`, start API/portal on `:8010`, open browser.
-2. **Stage 2 (Launch button):** write `.env`, install `.[photoreal-gen,vlm]` + curated Comfy deps (`requirements/comfyui-photoreal.txt`) **only if missing**, `download_models.py --all` (photoreal_gen + vlm + sam3; skips existing weights), then start **API + ComfyUI**. On success the browser opens the **timeline** studio at `/timeline`.
+1. **Stage 1 (script):** prefer drive-local `runtime/python` → heal/create `.venv` bound to it → `pip install -e ".[portal]"` if needed → start API/portal on `:8010` → open browser **only after** `/api/health` succeeds.
+2. **Stage 2 (Launch button):** write `.env`, install `.[photoreal-gen,vlm]` + curated Comfy deps (`requirements/comfyui-photoreal.txt`) **only if missing**, `download_models.py --photoreal-gen --vlm` when local character weights are missing, then start **API + ComfyUI**. On success the browser opens the **timeline** studio at `/timeline`. Wan/SAM/depth stacks are **not** pulled by Launch — use `scripts/download_models.py --wan-animate` (etc.) when needed.
 
-Relaunch / click **Launch** again: cancels any in-flight Stage-2 (kills the download subprocess) and starts fresh. Civitai `.partial` files resume via HTTP Range; Hugging Face resumes incomplete cache shards. Stale Comfy on `:8188` is stopped before restart; a healthy API on `:8010` is left running. Stage-1 skips `.[portal]` when already importable.
+### Multi-app Comfy on the same PC
+
+Generate/Launch **detect** whether `:8188` is this repo’s Comfy (`runtime/comfyui` / `comfy.pid`):
+
+- **Ours + healthy + photoreal models listed** → reuse (no restart).
+- **Ours but stale** (wrong/empty model lists) → restart only our process.
+- **Another app owns `:8188`** → leave it alone; start this repo’s Comfy on the next free port (`8189`…) and set `COMFY_URL` for the portal session. Job logs show the chosen URL.
+
+Force restart via the portal API still claims the preferred port when you explicitly ask for a hard reset.
+
+Before any pip work, the Windows launch script:
+
+1. Ensures a **drive-local CPython ≥ 3.11** under [`runtime/python/`](../runtime/python/) (downloaded once onto the repo volume via NuGet; gitignored). Prefer this over each PC’s `C:\Users\...\Python` so moving the volume does not orphan `.venv`.
+2. Falls back to system `py` / PATH / install roots (or `winget`) only if portable bootstrap fails — that path **ties `.venv` to the machine**.
+3. Validates `.venv`: interpreter runs; `pyvenv.cfg` `home=` / `executable=` exist; when `runtime/python` is present, home must sit **under** it (forces one-time migrate off system Python); create-path **drive letter** must match the repo drive (e.g. keep the volume as **`H:`** on every PC).
+4. Installs portal deps only when missing, starts the API, then opens the browser. If health never succeeds, it prints log tails and exits non-zero (no dead browser tab).
+5. **Build fingerprint:** `/api/health` returns a short hash of `photoreal/` + `web/`. If a healthy API is already on `:8010` but its `build` does not match the repo, Stage-1 **restarts** it so new routes (e.g. `/api/project`) are live. Unchanged code keeps the fast “already healthy” path.
+6. **Cache-bust open:** Stage-1 opens the portal as `http://127.0.0.1:8010/?b=<build>` so a previously cached HTML shell is re-fetched once after a code change.
+
+**HTML shells and assets:** `/`, `/timeline`, and `/character` are served with `Cache-Control: no-store` (plus `no-cache` / `Pragma` / `Expires`). Every `<script>` / `<link>` URL and a `<meta name="portal-build">` tag carry the same build id from `/api/health`. You never need to bump `?v=` by hand — editing anything under `photoreal/` or `web/` changes the fingerprint and therefore every asset URL. Open tabs also poll `/api/health` every ~15s via `/ui/build_guard.js`; if the server build differs from the page meta, a fixed red banner offers **Reload**.
+
+**Stale portal symptom:** timeline save status or Record Reference errors saying **“Portal API is out of date (no /api/project)”** mean the browser is talking to an old API process. Re-run `launch.bat` / `launch.sh` (it will restart). If a red “Portal code updated” banner appears, click **Reload**. Clips recorded against a stale API or a stale cached frontend were never saved and cannot be recovered.
+
+**Portable volume checklist:** assign the same drive letter on every host (plan assumes **`H:`**); install a compatible **NVIDIA driver** on each host (CUDA cannot live only on the disk). Do not commit `runtime/python/` or `.venv/`. Fresh clones elsewhere bootstrap their own `runtime/python` + download weights via Launch — they do not need your `H:` tree.
+
+**RTX 50 / Blackwell:** local Generate needs a PyTorch **CUDA 12.8** (`cu128`) wheel. Stage-2 Launch and Generate env-check call `nvidia-smi`; when a GPU is present but `.venv` still has a CPU/old torch, they auto-install from `https://download.pytorch.org/whl/cu128`. Plain `pip install torch` from PyPI is not enough. If `nvidia-smi` is missing on the host, Generate correctly falls back to Runpod Flash.
+
+**Linux:** Stage-1 still uses system Python + repo `.venv` (no portable Windows runtime). GPU hosts remain the primary Linux path.
+
+Relaunch / click **Launch** again: cancels any in-flight Stage-2 (kills the download subprocess) and starts fresh. Civitai `.partial` files resume via HTTP Range; Hugging Face resumes incomplete cache shards. Stale Comfy on `:8188` is stopped before restart; a healthy API on `:8010` is left running **only if** its build fingerprint still matches the repo. Stage-1 skips `.[portal]` when already importable.
 
 
 | Service | Port |
@@ -131,7 +160,7 @@ Endpoint mounts volume `photoreal-models` at `/runpod-volume/` (datacenter `US-C
 **Completeness check (automated):** before Generate submits a job, the portal ensures the volume passes a file/size layout check (Flux klein + LoRAs + VLM + `runtime/comfyui/main.py` + extra-paths yaml). If incomplete (or `FLASH_VOLUME_SYNCED` unset), it starts a short-lived Runpod pod attached to the volume that:
 
 1. Re-runs the same completeness probe
-2. Downloads only missing pieces via `scripts/download_models.py --all` (skips files already present)
+2. Downloads only missing pieces via `scripts/download_models.py --photoreal-gen --vlm` (skips files already present). Other abilities stay CLI (`--sam3`, `--depth`, `--wan-animate`, `--all`, …).
 3. Clones ComfyUI if needed, copies `scripts/flash_comfyui_extra_model_paths.yaml`
 4. Sets `FLASH_VOLUME_SYNCED=1` in portal `.env` only after the check passes
 
@@ -157,7 +186,7 @@ Local `scripts/download_models.py` remains the source of truth for *what* to dow
 
 ## UI kit
 
-Reusable white controls live in [`web/ui/`](../web/ui/). Portal page: [`web/portal/`](../web/portal/). Timeline studio: [`web/timeline/`](../web/timeline/) (opened after a successful Launch) — local NLE: import/drag media onto generic tracks, edit on a ruler/playhead timeline, preview at the playhead (in-memory only; no server persistence yet). **Create Character** opens a modal (also at `/character`) that runs auto-reprompt then `photoreal_gen` via `/api/character/*` (local CUDA + Comfy, or Runpod Flash when configured). **Record Reference** opens a camera modal: local **Vosk** listens for spoken “start” / “stop” (on-screen buttons always work; no cloud ASR), then review → **Save** places a `role=reference` clip on a **References** track. Right-click a clip or the preview → **Replace Character** stages: Segment → Depth → Character Reference → Pose Lock (see [replace_character.md](replace_character.md)). Always use `PhotorealUI.createButton` / `createField`.
+Reusable white controls live in [`web/ui/`](../web/ui/). Portal page: [`web/portal/`](../web/portal/). Timeline studio: [`web/timeline/`](../web/timeline/) (opened after a successful Launch) — local NLE: import/drag media onto generic tracks, edit on a ruler/playhead timeline, preview at the playhead. **Autosaves** the default project to `data/workspace/projects/default/project.json` (user media under `media/`, served at `/project-media/`). Stage outputs stay under `data/outputs/*`; clip fields bind them so Segment → Depth → Inpaint → Pose Lock → Wan lineage survives refresh. **Create Character** opens a modal (also at `/character`) that runs auto-reprompt then `photoreal_gen` via `/api/character/*` (local CUDA + Comfy, or Runpod Flash when configured). **Record Reference** opens a camera modal: local **Vosk** listens for spoken “start” / “stop” (on-screen buttons always work; no cloud ASR), then review → **Save** uploads WebM to project media and places a `role=reference` clip on a **References** track. Right-click a clip or the preview → **Replace Character** stages: Segment → Depth → Character Reference → Pose Lock (see [replace_character.md](replace_character.md)). Always use `PhotorealUI.createButton` / `createField`.
 
 ### Local voice (Vosk)
 

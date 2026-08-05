@@ -53,3 +53,5 @@ curl -s http://127.0.0.1:8010/api/sam3/jobs/<job_id>
 
 - Restart Comfy after the first `--sam3` download so it picks up `data/models/sam3/`.
 - Same VRAM caveats as other Comfy jobs: don’t run heavy Klein + SAM3 simultaneously on 24 GB without unloading.
+- **Timeline Segment** always sends `text_prompt=person` (no concept dialog). Prefer short nouns over long prose if you call the API yourself.
+- Job status payloads include a `logs` array; the Timeline operation-log modal streams those lines while the job runs.

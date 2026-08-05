@@ -1,7 +1,7 @@
 {
   "ability": "photoreal_gen",
   "backbone": "flux.2-klein-base-9b",
-  "updated_at": "2026-07-31T22:00:07.049940+00:00",
+  "updated_at": "2026-08-05T21:10:29.744762+00:00",
   "assets": [
     {
       "role": "flux2_ae",
@@ -46,12 +46,19 @@
       "filename": "mrpopo_photorealistic.safetensors",
       "url": "https://civitai.com/api/download/models/2972219",
       "role": "mrpopo_photoreal"
+    },
+    {
+      "repo": "Comfy-Org/vae-text-encorder-for-flux-klein-9b",
+      "file": "split_files/text_encoders/qwen_3_8b.safetensors",
+      "path": "data\\models\\flux2\\klein-base-9b\\text_encoder\\qwen_3_8b.safetensors",
+      "bytes": 16381517176,
+      "skipped": false
     }
   ],
   "notes": [
     "Klein 9B Base is FLUX Non-Commercial (gated on Hugging Face).",
     "Do not download full FLUX.2 [dev] transformer.",
     "Default SFW LoRAs: Lenovo UltraReal + Mrpopo photoreal.",
-    "Create data/models/flux2/klein-base-9b/text_encoder/qwen_3_8b.safetensors for Comfy CLIPLoader (type=flux2)."
+    "Comfy CLIPLoader uses Comfy-Org split_files/text_encoders/qwen_3_8b.safetensors as qwen_3_8b.safetensors (HF text_encoder shards alone are not enough)."
   ]
 }

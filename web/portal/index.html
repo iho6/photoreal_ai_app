@@ -3,11 +3,12 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="portal-build" content="__BUILD__" />
     <title>Photoreal</title>
-    <link rel="stylesheet" href="/ui/tokens.css" />
-    <link rel="stylesheet" href="/ui/base.css" />
-    <link rel="stylesheet" href="/ui/components/button.css" />
-    <link rel="stylesheet" href="/ui/components/field.css" />
+    <link rel="stylesheet" href="/ui/tokens.css?v=__BUILD__" />
+    <link rel="stylesheet" href="/ui/base.css?v=__BUILD__" />
+    <link rel="stylesheet" href="/ui/components/button.css?v=__BUILD__" />
+    <link rel="stylesheet" href="/ui/components/field.css?v=__BUILD__" />
     <style>
       .portal {
         max-width: 40rem;
@@ -27,9 +28,10 @@
   </head>
   <body>
     <main class="portal" id="app"></main>
-    <script src="/ui/components/button.js"></script>
-    <script src="/ui/components/field.js"></script>
-    <script src="/ui/photoreal-ui.js"></script>
-    <script src="/portal/portal.js?v=creds-fast"></script>
+    <script src="/ui/components/button.js?v=__BUILD__"></script>
+    <script src="/ui/components/field.js?v=__BUILD__"></script>
+    <script src="/ui/photoreal-ui.js?v=__BUILD__"></script>
+    <script src="/ui/build_guard.js?v=__BUILD__"></script>
+    <script src="/portal/portal.js?v=__BUILD__"></script>
   </body>
 </html>

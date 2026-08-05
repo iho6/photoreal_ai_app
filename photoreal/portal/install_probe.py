@@ -50,26 +50,127 @@ def requirements_sha256(path: Path | None = None) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def torch_cuda_flavor() -> str:
+    """
+    Short tag for the installed torch CUDA build (used in comfy stamp).
+
+    Examples: ``cuda-12.8``, ``cuda-12.4``, ``cpu``, ``missing``.
+    """
+    try:
+        import torch
+
+        ver = getattr(torch.version, "cuda", None)
+        if ver:
+            return f"cuda-{ver}"
+        if torch.cuda.is_available():
+            return "cuda-unknown"
+        return "cpu"
+    except Exception:  # noqa: BLE001
+        return "missing"
+
+
+def comfy_stamp_payload(path: Path | None = None) -> str:
+    """Stamp line: ``<req_sha256> <flavor> <requirements_name>``."""
+    return f"{requirements_sha256(path)}  {torch_cuda_flavor()}  {COMFY_REQUIREMENTS.name}\n"
+
+
 def comfy_stamp_matches(path: Path | None = None) -> bool:
     stamp = COMFY_STAMP
     if not stamp.is_file():
         return False
     try:
-        recorded = stamp.read_text(encoding="utf-8").strip().split()[0]
+        parts = stamp.read_text(encoding="utf-8").strip().split()
     except OSError:
         return False
-    return recorded == requirements_sha256(path)
+    if not parts:
+        return False
+    if parts[0] != requirements_sha256(path):
+        return False
+    # New stamps: ``<sha> <flavor> <requirements_name>``
+    if len(parts) >= 2 and parts[1] != COMFY_REQUIREMENTS.name:
+        return parts[1] == torch_cuda_flavor()
+    # Legacy stamps: ``<sha>  comfyui-photoreal.txt`` (no flavor).
+    # Invalidate when an NVIDIA GPU is present (may be stuck on CPU torch).
+    try:
+        from photoreal.portal.torch_cuda import nvidia_smi_ok
+
+        if nvidia_smi_ok():
+            return False
+    except Exception:  # noqa: BLE001
+        pass
+    return True
 
 
 def write_comfy_stamp(path: Path | None = None) -> Path:
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    digest = requirements_sha256(path)
-    COMFY_STAMP.write_text(f"{digest}  {COMFY_REQUIREMENTS.name}\n", encoding="utf-8")
+    COMFY_STAMP.write_text(comfy_stamp_payload(path), encoding="utf-8")
     return COMFY_STAMP
 
 
 def comfy_install_satisfied() -> bool:
-    return comfy_stamp_matches() and comfy_probe_satisfied()
+    if not (comfy_stamp_matches() and comfy_probe_satisfied()):
+        return False
+    # Even with a matching stamp, heal when the *venv* lacks CUDA (subprocess probe —
+    # do not trust sticky in-process +cpu inside the long-lived portal).
+    try:
+        from photoreal.portal.torch_cuda import venv_torch_needs_reinstall
+
+        needs, _info = venv_torch_needs_reinstall()
+        if needs:
+            return False
+    except Exception:  # noqa: BLE001
+        pass
+    return True
+
+
+def models_missing_parts() -> list[str]:
+    """
+    Human-readable gaps in core photoreal_gen weights (local disk only).
+
+    Empty list means the Launch/Generate local probe is satisfied.
+    VLM is not required here (pulled when a full ``--all`` download runs).
+    """
+    models = REPO_ROOT / "data" / "models"
+    klein = models / "flux2" / "klein-base-9b"
+    loras = models / "loras"
+    missing: list[str] = []
+    required = (
+        (klein / "ae.safetensors", 100_000_000),
+        (klein / "flux-2-klein-base-9b.safetensors", 1_000_000_000),
+        (klein / "text_encoder" / "qwen_3_8b.safetensors", 1_000_000_000),
+        (loras / "lenovo_flux_klein9b.safetensors", 1_000_000),
+        (loras / "mrpopo_photorealistic.safetensors", 1_000_000),
+    )
+    for path, min_bytes in required:
+        try:
+            rel = path.relative_to(REPO_ROOT)
+        except ValueError:
+            rel = path
+        try:
+            if not path.is_file() or path.stat().st_size < min_bytes:
+                missing.append(f"missing/small: {rel.as_posix()}")
+        except OSError:
+            missing.append(f"unreadable: {rel.as_posix()}")
+
+    te = klein / "text_encoder"
+    tok = klein / "tokenizer"
+    if not te.is_dir():
+        missing.append("missing: data/models/flux2/klein-base-9b/text_encoder/")
+    else:
+        try:
+            if sum(1 for p in te.rglob("*") if p.is_file()) < 3:
+                missing.append("incomplete: text_encoder/")
+        except OSError:
+            missing.append("unreadable: text_encoder/")
+    if not tok.is_dir():
+        missing.append("missing: data/models/flux2/klein-base-9b/tokenizer/")
+    else:
+        try:
+            if sum(1 for p in tok.rglob("*") if p.is_file()) < 3:
+                missing.append("incomplete: tokenizer/")
+        except OSError:
+            missing.append("unreadable: tokenizer/")
+    return missing
 
 
 def models_install_satisfied() -> bool:
@@ -79,31 +180,7 @@ def models_install_satisfied() -> bool:
     Does not hit HF/Civitai. VLM is not required for this probe (Flash / local
     Comfy can proceed; VLM is pulled only when missing and a download runs).
     """
-    models = REPO_ROOT / "data" / "models"
-    klein = models / "flux2" / "klein-base-9b"
-    loras = models / "loras"
-    required = (
-        (klein / "ae.safetensors", 100_000_000),
-        (klein / "flux-2-klein-base-9b.safetensors", 1_000_000_000),
-        (loras / "lenovo_flux_klein9b.safetensors", 1_000_000),
-        (loras / "mrpopo_photorealistic.safetensors", 1_000_000),
-    )
-    for path, min_bytes in required:
-        try:
-            if not path.is_file() or path.stat().st_size < min_bytes:
-                return False
-        except OSError:
-            return False
-    te = klein / "text_encoder"
-    tok = klein / "tokenizer"
-    if not te.is_dir() or not tok.is_dir():
-        return False
-    try:
-        te_files = sum(1 for p in te.rglob("*") if p.is_file())
-        tok_files = sum(1 for p in tok.rglob("*") if p.is_file())
-    except OSError:
-        return False
-    return te_files >= 3 and tok_files >= 3
+    return not models_missing_parts()
 
 
 def subprocess_modules_ok(python_exe: str | Path, modules: tuple[str, ...]) -> bool:

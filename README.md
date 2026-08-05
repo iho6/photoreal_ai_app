@@ -4,16 +4,16 @@ Hybrid generative AI studio: pluggable pipelines, ComfyUI runtime, CLI / API / w
 
 ## First run (launch portal)
 
-Creates `.venv`, opens a white credential portal, then **Launch** installs weights and starts API + Comfy. Details: [docs/portal.md](docs/portal.md).
+Stage-1 on Windows prefers a **drive-local** interpreter at `runtime/python/` (gitignored; downloaded once onto the repo volume) so `.venv` is not tied to each PC’s `C:\Users\...\Python`. Keep the volume’s drive letter stable when moving disks (e.g. always **`H:`**). Each host still needs a compatible **NVIDIA driver** for CUDA. If portable bootstrap fails, Stage-1 falls back to system Python / `winget` (machine-tied). Then **Launch** installs weights and starts Comfy. Details: [docs/portal.md](docs/portal.md).
 
 ```bash
-# Linux (primary / GPU) — needs tmux
+# Linux (primary / GPU) — needs tmux + Python 3.11+
 chmod +x launch.sh scripts/launch.sh
 ./launch.sh
 # tmux attach -t photoreal
 
-# Windows
-launch.bat
+# Windows (PowerShell)
+.\launch.bat
 ```
 
 Portal: `http://127.0.0.1:8010/` — HF token + Runpod API key → **Launch**.

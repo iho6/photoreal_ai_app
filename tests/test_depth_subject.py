@@ -8,9 +8,11 @@ import pytest
 from PIL import Image
 
 from photoreal.pipelines.vision.depth_subject import (
+    DEPTH_WORKFLOW,
     composite_depth_with_mask,
     patch_da3_workflow,
 )
+from photoreal.services.comfy_client import load_workflow_template
 
 
 def test_patch_da3_workflow_sets_image_and_model():
@@ -34,6 +36,47 @@ def test_patch_da3_workflow_sets_image_and_model():
     assert out["1"]["inputs"]["image"] == "uploaded.png"
     assert out["2"]["inputs"]["model_name"] == "depth_anything_3_mono_large.safetensors"
     assert wf["1"]["inputs"]["image"] == "x.png"  # deepcopy
+
+
+def test_patch_da3_workflow_rewrites_legacy_da3_render_keys():
+    wf = {
+        "4": {
+            "class_type": "DA3Render",
+            "inputs": {
+                "da3_geometry": ["3", 0],
+                "output": "depth",
+                "normalization": "min_max",
+                "apply_sky_clip": True,
+            },
+        }
+    }
+    out = patch_da3_workflow(wf, image_ref="x.png")
+    inp = out["4"]["inputs"]
+    assert inp["output"] == "depth"
+    assert inp["output.normalization"] == "min_max"
+    assert inp["output.apply_sky_clip"] is True
+    assert "normalization" not in inp
+    assert "apply_sky_clip" not in inp
+
+
+def test_depth_workflow_template_uses_dotted_da3_render_keys():
+    wf = load_workflow_template(DEPTH_WORKFLOW)
+    render = next(
+        n for n in wf.values() if isinstance(n, dict) and n.get("class_type") == "DA3Render"
+    )
+    inp = render["inputs"]
+    assert "output.normalization" in inp
+    assert "output.apply_sky_clip" in inp
+    assert "normalization" not in inp
+    assert "apply_sky_clip" not in inp
+    patched = patch_da3_workflow(wf, image_ref="frame.png")
+    pin = next(
+        n
+        for n in patched.values()
+        if isinstance(n, dict) and n.get("class_type") == "DA3Render"
+    )["inputs"]
+    assert pin["output.normalization"] == "v2_style"
+    assert pin["output.apply_sky_clip"] is False
 
 
 def test_composite_depth_with_mask_feathers(tmp_path: Path):

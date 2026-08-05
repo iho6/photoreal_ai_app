@@ -555,7 +555,7 @@
       showImageResultModal(previewUrl, "Segment cutout");
     }
 
-    function pollJob(url, label, maxTicks) {
+    function pollJob(url, label, maxTicks, onUpdate) {
       return new Promise(function (resolve, reject) {
         var n = 0;
         function tick() {
@@ -567,6 +567,11 @@
               });
             })
             .then(function (j) {
+              if (typeof onUpdate === "function") {
+                try {
+                  onUpdate(j);
+                } catch (_) {}
+              }
               if (j.status === "done" || j.status === "completed") {
                 resolve(j);
                 return;
@@ -588,42 +593,93 @@
       });
     }
 
-    function pollSam3Job(jobId) {
+    function pollSam3Job(jobId, onUpdate) {
       return pollJob(
         "/api/sam3/jobs/" + encodeURIComponent(jobId),
         "SAM3",
-        180
+        180,
+        onUpdate
       );
     }
 
-    function pollDepthJob(jobId) {
+    function pollDepthJob(jobId, onUpdate) {
       return pollJob(
         "/api/depth/jobs/" + encodeURIComponent(jobId),
         "Depth convert",
-        240
+        240,
+        onUpdate
       );
     }
 
-    function pollInpaintJob(jobId) {
+    function pollInpaintJob(jobId, onUpdate) {
       return pollJob(
         "/api/character/inpaint/jobs/" + encodeURIComponent(jobId),
         "Character inpaint",
-        360
+        360,
+        onUpdate
       );
     }
 
-    function pollPoseLockJob(jobId) {
+    function pollPoseLockJob(jobId, onUpdate) {
       return pollJob(
         "/api/character/pose-lock/jobs/" + encodeURIComponent(jobId),
         "Pose lock",
-        360
+        360,
+        onUpdate
       );
+    }
+
+    function openOpLog(title) {
+      var OpLog = global.TimelineOpLog;
+      if (!OpLog || typeof OpLog.open !== "function") {
+        return {
+          appendLine: function () {},
+          appendLogs: function () {},
+          setMeta: function () {},
+          setFinished: function () {},
+          onUpdate: function () {},
+        };
+      }
+      var ui = OpLog.open({ title: title });
+      return {
+        appendLine: function (line) {
+          ui.appendLine(line);
+        },
+        appendLogs: function (logs) {
+          ui.appendLogs(logs);
+        },
+        setMeta: function (text) {
+          ui.setMeta(text);
+        },
+        setFinished: function (ok, errMsg) {
+          ui.setFinished(ok, errMsg);
+        },
+        onUpdate: OpLog.bindJobUpdates(ui, title),
+      };
+    }
+
+    function failOpLog(logUi, err) {
+      var msg = err && err.message ? err.message : String(err);
+      logUi.appendLine("ERROR: " + msg);
+      logUi.setFinished(false, msg);
     }
 
     function fetchUrlBlob(url) {
       return fetch(url).then(function (r) {
         if (!r.ok) throw new Error("Could not load " + url);
         return r.blob();
+      });
+    }
+
+    /** Upload blob: URLs to project media so Wan lineage survives reload. */
+    function ensureDurableUrl(url, filename) {
+      if (!url || !M.isBlobUrl(url)) return Promise.resolve(url);
+      return fetchUrlBlob(url).then(function (blob) {
+        return M.uploadProjectMedia(blob, filename || "media.bin").then(
+          function (up) {
+            return up.url;
+          }
+        );
       });
     }
 
@@ -693,16 +749,9 @@
         window.alert("No clip to segment.");
         return;
       }
-      var concept = window.prompt(
-        "Segment concept (text prompt for SAM3)",
-        "person"
-      );
-      if (concept == null) return;
-      concept = String(concept).trim();
-      if (!concept) {
-        window.alert("A text concept is required.");
-        return;
-      }
+      var concept = "person";
+      var logUi = openOpLog("Segment");
+      logUi.appendLine("clip=" + clip.id + " text_prompt=" + concept);
       // Reference clips: prefer first source frame (inPoint) for Replace Character.
       var localT =
         clip.mediaType === "video"
@@ -710,6 +759,7 @@
             ? Math.max(0, clip.inPoint || 0)
             : Math.max(0, state.playhead - clip.start + (clip.inPoint || 0))
           : 0;
+      logUi.appendLine("frame_t=" + localT.toFixed(3));
       extractFrameBlob(clip, localT)
         .then(function (blob) {
           var fd = new FormData();
@@ -727,13 +777,20 @@
         })
         .then(function (started) {
           if (!started.job_id) throw new Error("No job_id from SAM3");
-          return pollSam3Job(started.job_id);
+          logUi.appendLine("job_id=" + started.job_id);
+          return pollSam3Job(started.job_id, logUi.onUpdate);
         })
         .then(function (job) {
+          var urls = (job && job.images) || [];
+          if (!urls.length) {
+            throw new Error("Segment finished but returned no images.");
+          }
           showSegmentResult(job, clip, localT);
+          logUi.appendLine("Done.");
+          logUi.setFinished(true);
         })
         .catch(function (e) {
-          window.alert("Segment failed: " + (e.message || e));
+          failOpLog(logUi, e);
         });
     }
 
@@ -742,6 +799,8 @@
         window.alert("Segment the clip first (mask + frame required).");
         return;
       }
+      var logUi = openOpLog("Depth");
+      logUi.appendLine("clip=" + clip.id);
       Promise.all([
         fetchUrlBlob(clip.segmentFrameUrl),
         fetchUrlBlob(clip.segmentMaskUrl),
@@ -762,7 +821,8 @@
         })
         .then(function (started) {
           if (!started.job_id) throw new Error("No job_id from depth convert");
-          return pollDepthJob(started.job_id);
+          logUi.appendLine("job_id=" + started.job_id);
+          return pollDepthJob(started.job_id, logUi.onUpdate);
         })
         .then(function (job) {
           var urls = (job && job.images) || [];
@@ -771,10 +831,12 @@
           clip.poseLockUrl = null;
           exclusiveShow(clip, "depth");
           M.emit(state);
+          logUi.appendLine("Done.");
+          logUi.setFinished(true);
           showImageResultModal(urls[0], "Person depth");
         })
         .catch(function (e) {
-          window.alert("Depth failed: " + (e.message || e));
+          failOpLog(logUi, e);
         });
     }
 
@@ -802,6 +864,8 @@
       }
       var backdropLocal =
         Math.max(0, t - backdrop.start) + (backdrop.inPoint || 0);
+      var logUi = openOpLog("Character Inpaint");
+      logUi.appendLine("clip=" + clip.id + " backdrop=" + backdrop.id);
 
       Promise.all([
         extractFrameBlob(backdrop, backdropLocal),
@@ -837,7 +901,8 @@
         })
         .then(function (started) {
           if (!started.job_id) throw new Error("No job_id from inpaint");
-          return pollInpaintJob(started.job_id);
+          logUi.appendLine("job_id=" + started.job_id);
+          return pollInpaintJob(started.job_id, logUi.onUpdate);
         })
         .then(function (job) {
           var urls = (job && job.images) || [];
@@ -846,15 +911,18 @@
           clip.backdropClipId = backdrop.id;
           clip.poseLockUrl = null;
           clip.showPoseLock = false;
+          M.noteCharacterUsed(state, referenceUrl);
           exclusiveShow(clip, "inpaint");
           M.emit(state);
+          logUi.appendLine("Done.");
+          logUi.setFinished(true);
           showImageResultModal(
             urls[0],
             "Character on backdrop (composited scene)"
           );
         })
         .catch(function (e) {
-          window.alert("Character Reference failed: " + (e.message || e));
+          failOpLog(logUi, e);
         });
     }
 
@@ -863,6 +931,8 @@
         window.alert("Need Depth and Character Reference bake first.");
         return;
       }
+      var logUi = openOpLog("Pose Lock");
+      logUi.appendLine("clip=" + clip.id);
       Promise.all([
         fetchUrlBlob(clip.depthUrl),
         fetchUrlBlob(clip.inpaintUrl),
@@ -884,7 +954,8 @@
         })
         .then(function (started) {
           if (!started.job_id) throw new Error("No job_id from pose lock");
-          return pollPoseLockJob(started.job_id);
+          logUi.appendLine("job_id=" + started.job_id);
+          return pollPoseLockJob(started.job_id, logUi.onUpdate);
         })
         .then(function (job) {
           var urls = (job && job.images) || [];
@@ -892,10 +963,12 @@
           clip.poseLockUrl = urls[0];
           exclusiveShow(clip, "poseLock");
           M.emit(state);
+          logUi.appendLine("Done.");
+          logUi.setFinished(true);
           showImageResultModal(urls[0], "Pose lock");
         })
         .catch(function (e) {
-          window.alert("Pose Lock failed: " + (e.message || e));
+          failOpLog(logUi, e);
         });
     }
 
@@ -934,11 +1007,12 @@
       });
     }
 
-    function pollWanAnimateJob(jobId) {
+    function pollWanAnimateJob(jobId, onUpdate) {
       return pollJob(
         "/api/wan-animate/jobs/" + encodeURIComponent(jobId),
         "Wan Animate",
-        720
+        720,
+        onUpdate
       );
     }
 
@@ -1028,6 +1102,10 @@
       prompt =
         String(prompt).trim() || "a person moving naturally, photorealistic";
 
+      var logUi = openOpLog("Wan Animate");
+      logUi.appendLine("clip=" + clip.id);
+      logUi.appendLine("prompt=" + prompt);
+
       Promise.all([
         fetchUrlBlob(clip.poseLockUrl),
         fetchUrlBlob(clip.src),
@@ -1043,6 +1121,9 @@
           if (length <= 0) {
             throw new Error("Driving video has no frames");
           }
+          logUi.appendLine(
+            "length=" + length + " fps=" + fps + " frames=" + (frames || "?")
+          );
           return postWanAnimate({
             characterBlob: charBlob,
             drivingBlob: driveBlob,
@@ -1055,25 +1136,41 @@
             continueMotionMaxFrames: 5,
           }).then(function (started) {
             if (!started.job_id) throw new Error("No job_id from wan-animate");
-            return pollWanAnimateJob(started.job_id).then(function (job) {
-              return placeAnimateFromJob(job, {
-                name: "Animate",
-                start: clip.start,
-                sourceClipId: clip.id,
-                drivingVideoSrc: clip.src,
-                characterStillUrl: clip.poseLockUrl,
-                videoFrameOffset: 0,
-                wanLength: length,
-                wanFps: fps,
-                drivingFrameCount: frames,
-                continueMotionMaxFrames: 5,
-                wanPrompt: prompt,
-              });
-            });
+            logUi.appendLine("job_id=" + started.job_id);
+            return pollWanAnimateJob(started.job_id, logUi.onUpdate).then(
+              function (job) {
+                return ensureDurableUrl(
+                  clip.src,
+                  (clip.name || "drive") + ".webm"
+                ).then(function (driveUrl) {
+                  if (driveUrl !== clip.src) {
+                    clip.src = driveUrl;
+                    M.emit(state);
+                  }
+                  return placeAnimateFromJob(job, {
+                    name: "Animate",
+                    start: clip.start,
+                    sourceClipId: clip.id,
+                    drivingVideoSrc: driveUrl,
+                    characterStillUrl: clip.poseLockUrl,
+                    videoFrameOffset: 0,
+                    wanLength: length,
+                    wanFps: fps,
+                    drivingFrameCount: frames,
+                    continueMotionMaxFrames: 5,
+                    wanPrompt: prompt,
+                  });
+                });
+              }
+            );
           });
         })
+        .then(function () {
+          logUi.appendLine("Done.");
+          logUi.setFinished(true);
+        })
         .catch(function (e) {
-          window.alert("Wan Animate failed: " + (e.message || e));
+          failOpLog(logUi, e);
         });
     }
 
@@ -1093,6 +1190,10 @@
       var nextOffset = (clip.videoFrameOffset || 0) + (clip.wanLength || 0);
       var prompt =
         clip.wanPrompt || "a person moving naturally, photorealistic";
+
+      var logUi = openOpLog("Extend Animate");
+      logUi.appendLine("clip=" + clip.id + " offset=" + nextOffset);
+      logUi.appendLine("prompt=" + prompt);
 
       var metaPromise =
         clip.drivingFrameCount != null && clip.wanFps != null
@@ -1115,6 +1216,9 @@
           if (length <= 0) {
             throw new Error("No remaining driving frames to extend");
           }
+          logUi.appendLine(
+            "length=" + length + " remaining=" + remaining + " fps=" + fps
+          );
           return Promise.all([
             fetchUrlBlob(clip.characterStillUrl),
             fetchUrlBlob(clip.drivingVideoSrc),
@@ -1134,26 +1238,41 @@
               continueMotionMaxFrames: clip.continueMotionMaxFrames || 5,
             }).then(function (started) {
               if (!started.job_id) throw new Error("No job_id from wan-animate");
-              return pollWanAnimateJob(started.job_id).then(function (job) {
-                return placeAnimateFromJob(job, {
-                  name: "Animate extend",
-                  start: clip.start + clip.duration,
-                  sourceClipId: clip.sourceClipId,
-                  drivingVideoSrc: clip.drivingVideoSrc,
-                  characterStillUrl: clip.characterStillUrl,
-                  videoFrameOffset: nextOffset,
-                  wanLength: length,
-                  wanFps: fps,
-                  drivingFrameCount: frames,
-                  continueMotionMaxFrames: clip.continueMotionMaxFrames || 5,
-                  wanPrompt: prompt,
-                });
-              });
+              logUi.appendLine("job_id=" + started.job_id);
+              return pollWanAnimateJob(started.job_id, logUi.onUpdate).then(
+                function (job) {
+                  return Promise.all([
+                    ensureDurableUrl(clip.drivingVideoSrc, "driving.webm"),
+                    ensureDurableUrl(clip.characterStillUrl, "character.png"),
+                  ]).then(function (pair) {
+                    clip.drivingVideoSrc = pair[0];
+                    clip.characterStillUrl = pair[1];
+                    return placeAnimateFromJob(job, {
+                      name: "Animate extend",
+                      start: clip.start + clip.duration,
+                      sourceClipId: clip.sourceClipId,
+                      drivingVideoSrc: pair[0],
+                      characterStillUrl: pair[1],
+                      videoFrameOffset: nextOffset,
+                      wanLength: length,
+                      wanFps: fps,
+                      drivingFrameCount: frames,
+                      continueMotionMaxFrames:
+                        clip.continueMotionMaxFrames || 5,
+                      wanPrompt: prompt,
+                    });
+                  });
+                }
+              );
             });
           });
         })
+        .then(function () {
+          logUi.appendLine("Done.");
+          logUi.setFinished(true);
+        })
         .catch(function (e) {
-          window.alert("Extend Animate failed: " + (e.message || e));
+          failOpLog(logUi, e);
         });
     }
 

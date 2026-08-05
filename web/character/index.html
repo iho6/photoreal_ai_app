@@ -3,20 +3,22 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="portal-build" content="__BUILD__" />
     <title>Photoreal — Create Character</title>
-    <link rel="stylesheet" href="/ui/tokens.css" />
-    <link rel="stylesheet" href="/ui/base.css" />
-    <link rel="stylesheet" href="/ui/components/button.css" />
-    <link rel="stylesheet" href="/ui/components/field.css" />
-    <link rel="stylesheet" href="/character-assets/character.css?v=ch3" />
+    <link rel="stylesheet" href="/ui/tokens.css?v=__BUILD__" />
+    <link rel="stylesheet" href="/ui/base.css?v=__BUILD__" />
+    <link rel="stylesheet" href="/ui/components/button.css?v=__BUILD__" />
+    <link rel="stylesheet" href="/ui/components/field.css?v=__BUILD__" />
+    <link rel="stylesheet" href="/character-assets/character.css?v=__BUILD__" />
   </head>
   <body>
     <main class="ch-page" id="app"></main>
-    <script src="/ui/components/button.js"></script>
-    <script src="/ui/components/field.js"></script>
-    <script src="/ui/photoreal-ui.js"></script>
-    <script src="/character-assets/gallery.js?v=ch3"></script>
-    <script src="/character-assets/character.js?v=log-select"></script>
+    <script src="/ui/components/button.js?v=__BUILD__"></script>
+    <script src="/ui/components/field.js?v=__BUILD__"></script>
+    <script src="/ui/photoreal-ui.js?v=__BUILD__"></script>
+    <script src="/ui/build_guard.js?v=__BUILD__"></script>
+    <script src="/character-assets/gallery.js?v=__BUILD__"></script>
+    <script src="/character-assets/character.js?v=__BUILD__"></script>
     <script>
       PhotorealCharacter.mount(document.getElementById("app"));
     </script>

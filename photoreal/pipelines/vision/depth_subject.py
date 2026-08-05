@@ -34,6 +34,19 @@ def patch_da3_workflow(
             inp["image"] = image_ref
         elif ct == "LoadDA3Model":
             inp["model_name"] = model_name
+        elif ct == "DA3Render":
+            # COMFY_DYNAMICCOMBO_V3: nested fields use dotted API keys.
+            if "normalization" in inp and "output.normalization" not in inp:
+                inp["output.normalization"] = inp.pop("normalization")
+            else:
+                inp.pop("normalization", None)
+            if "apply_sky_clip" in inp and "output.apply_sky_clip" not in inp:
+                inp["output.apply_sky_clip"] = inp.pop("apply_sky_clip")
+            else:
+                inp.pop("apply_sky_clip", None)
+            inp.setdefault("output", "depth")
+            inp.setdefault("output.normalization", "v2_style")
+            inp.setdefault("output.apply_sky_clip", False)
     return w
 
 

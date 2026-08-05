@@ -143,6 +143,15 @@
   gap: 0.75rem;
   margin: 0.85rem 0 0.75rem;
   flex-shrink: 0;
+  align-items: center;
+}
+
+.tl-save-status {
+  font-family: var(--pr-font-body);
+  font-size: 0.85rem;
+  color: var(--pr-ink-muted, var(--pr-ink));
+  opacity: 0.85;
+  min-height: 1.2em;
 }
 
 /* ——— NLE panel ——— */
@@ -537,4 +546,72 @@
   .nle-time {
     text-align: left;
   }
+}
+
+/* Timeline pipeline operation log (blocking until finished) */
+.nle-op-log-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  background: rgba(10, 10, 10, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  box-sizing: border-box;
+}
+
+.nle-op-log-modal {
+  width: min(720px, 100%);
+  max-height: min(80vh, 640px);
+  display: flex;
+  flex-direction: column;
+  background: var(--pr-bg);
+  border: var(--pr-line-width) solid var(--pr-line);
+}
+
+.nle-op-log-modal__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0.75rem;
+  border-bottom: var(--pr-line-width) solid var(--pr-line);
+  background: var(--pr-bg-wash);
+  flex-shrink: 0;
+}
+
+.nle-op-log-modal__title {
+  margin: 0;
+  font-family: var(--pr-font-display);
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.nle-op-log-modal__meta {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8rem;
+  color: var(--pr-muted);
+  border-bottom: var(--pr-line-width) solid var(--pr-line);
+  flex-shrink: 0;
+}
+
+.nle-op-log {
+  margin: 0;
+  padding: 0.75rem;
+  flex: 1;
+  min-height: 200px;
+  overflow: auto;
+  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--pr-ink);
+  background: var(--pr-bg-wash);
+}
+
+.nle-op-log-modal .pr-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }

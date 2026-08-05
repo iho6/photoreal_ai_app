@@ -43,3 +43,7 @@ Poll `GET /api/depth/jobs/{job_id}` until `status` is `done`; `images[0]` is the
 1. Right-click clip → **Segment** (stores `segmentMaskUrl` + `segmentFrameUrl` on the clip)  
 2. **Convert Depth** enables after segment; runs DA3 + composite  
 3. Menu row becomes **Show Depth** checkbox; when on, main preview shows the depth still (scrub to the ref clip start to inspect)
+
+## Comfy note
+
+`DA3Render.output` is a `COMFY_DYNAMICCOMBO_V3` widget: API prompts must use dotted keys (`output.normalization`, `output.apply_sky_clip`), not flat `normalization` / `apply_sky_clip`.

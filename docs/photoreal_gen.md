@@ -40,13 +40,17 @@ Upstream trees (do not refactor):
 |-------|-------|--------|
 | `flux-2-klein-base-9b.safetensors` | `data/models/flux2/klein-base-9b/` | HF gated `FLUX.2-klein-base-9B` |
 | `ae.safetensors` | same | HF gated `FLUX.2-dev` (**only** AE, not full dev) |
-| text encoder / tokenizer | `.../text_encoder/`, `.../tokenizer/` | from Klein base repo |
-| `qwen_3_8b.safetensors` | under `text_encoder/` | **Required for Comfy CLIPLoader** — provide a single-file Qwen3-8B (name must match workflow) |
+| text encoder / tokenizer (shards) | `.../text_encoder/`, `.../tokenizer/` | from Klein base repo |
+| `qwen_3_8b.safetensors` | under `text_encoder/` | **Required for Comfy CLIPLoader** — auto-downloaded from `Comfy-Org/vae-text-encorder-for-flux-klein-9b` (`split_files/text_encoders/qwen_3_8b.safetensors`) |
 | `lenovo_flux_klein9b.safetensors` | `data/models/loras/` | Civitai **2682771** public |
 | `mrpopo_photorealistic.safetensors` | `data/models/loras/` | Civitai **2972219** public |
 | `klein_snofs_v1_1.safetensors` | `data/models/loras/optional/` | Civitai **2695876** public, optional |
 
 Manifest: `data/models/photoreal_gen_manifest.json` (written by `scripts/download_models.py --photoreal-gen`).
+
+HF Klein text_encoder shards alone are **not** enough for Comfy — CLIPLoader needs the flat Comfy-Org `qwen_3_8b.safetensors` (pulled by `--photoreal-gen`).
+
+Portal auto-heals `comfyui_extra_model_paths.local.yaml` so `base_path` always matches this repo’s `data/` (e.g. after a drive-letter change).
 
 **Do not download:** Klein 4B, distilled 9B, 9B KV, full `flux2-dev.safetensors`, Mistral upsample.
 

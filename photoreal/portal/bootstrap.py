@@ -16,6 +16,7 @@ from photoreal.portal.install_probe import (
     comfy_install_satisfied,
     extras_deps_satisfied,
     models_install_satisfied,
+    models_missing_parts,
     write_comfy_stamp,
 )
 from photoreal.portal.logstream import (
@@ -35,6 +36,32 @@ from photoreal.portal.supervisor import start_all
 
 
 LogFn = Callable[..., None]  # emit(line, mode="append")
+
+# Stage-2 only pulls what character Generate needs (not wan/sam3/depth/--all).
+LAUNCH_DOWNLOAD_FLAGS = ("--photoreal-gen", "--vlm")
+
+
+def should_skip_local_model_download(*, runpod_token_set: bool, nvidia_ok: bool) -> bool:
+    """Skip local weight download only on Flash-only hosts (Runpod, no GPU)."""
+    return bool(runpod_token_set) and not bool(nvidia_ok)
+
+
+def vlm_weights_present(repo_root: Path | None = None) -> bool:
+    """True when Launch/Generate local VLM snapshot looks present."""
+    root = Path(repo_root) if repo_root is not None else REPO_ROOT
+    vlm = root / "data" / "models" / "vlm" / "Qwen3-VL-8B-Instruct"
+    return (vlm / "config.json").is_file()
+
+
+def launch_model_download_needed() -> bool:
+    """True when Stage-2 should run photoreal-gen + vlm download."""
+    return (not models_install_satisfied()) or (not vlm_weights_present())
+
+
+def launch_model_download_argv(python: str | Path | None = None) -> list[str]:
+    """Argv for Stage-2 weight download (photoreal-gen + vlm only)."""
+    py = str(python) if python is not None else str(venv_python())
+    return [py, str(DOWNLOAD_SCRIPT), *LAUNCH_DOWNLOAD_FLAGS]
 
 
 class LaunchCancelled(Exception):
@@ -278,6 +305,38 @@ def run_stage2(
         if not COMFY_REQUIREMENTS.is_file():
             log(f"WARNING: {COMFY_REQUIREMENTS} missing — skip", "append")
             return
+
+        from photoreal.portal.env_check import clear_torch_cuda_cache
+        from photoreal.portal.torch_cuda import (
+            ensure_cuda_torch,
+            nvidia_smi_ok,
+            venv_torch_needs_reinstall,
+        )
+
+        # GPU hosts: install Blackwell-capable cu128 torch before the curated reqs
+        # (plain PyPI torch is often CPU-only and would stick behind the stamp).
+        needs_cu, _venv_info = venv_torch_needs_reinstall(py)
+        if nvidia_smi_ok() and (needs_cu or not comfy_install_satisfied()):
+            log("Installing PyTorch CUDA 12.8 wheels (cu128) …", "append")
+            ok = ensure_cuda_torch(
+                python=py,
+                log=lambda msg: log(msg, "append"),
+                force=needs_cu,
+            )
+            clear_torch_cuda_cache()
+            if not ok:
+                log(
+                    "WARNING: cu128 torch install did not yield CUDA — "
+                    "Generate will fall back to Runpod until the host driver/torch is fixed",
+                    "append",
+                )
+        elif not nvidia_smi_ok():
+            log(
+                "nvidia-smi missing — installing Comfy deps without GPU torch "
+                "(local CUDA generate disabled on this host)",
+                "append",
+            )
+
         if comfy_install_satisfied():
             log("skip (already installed): curated Comfy requirements", "append")
             return
@@ -293,31 +352,82 @@ def run_stage2(
             raise RuntimeError(
                 f"step failed ({code}): Install ComfyUI requirements (curated)"
             )
+        # Only force-reinstall if -r pulled a CPU/old torch over cu128.
+        if nvidia_smi_ok():
+            needs_after, after_info = venv_torch_needs_reinstall(py)
+            if needs_after:
+                log(
+                    "torch: requirements left a non-CUDA/old build "
+                    f"({after_info.get('version') or 'missing'}) — force cu128 …",
+                    "append",
+                )
+                ensure_cuda_torch(
+                    python=py,
+                    log=lambda msg: log(msg, "append"),
+                    force=True,
+                )
+                clear_torch_cuda_cache()
+            else:
+                log(
+                    "torch: still cu128 after requirements — skip force reinstall",
+                    "append",
+                )
         write_comfy_stamp()
         log("wrote comfy requirements stamp", "append")
 
     def download_models() -> None:
-        # Runpod key ⇒ Flash generate; do not pull multi-GB local weights on Launch.
+        # Flash-only hosts (Runpod key, no local GPU): weights live on the volume.
+        # CUDA hosts always ensure local weights even if a Runpod key is also set.
         try:
             from photoreal.portal.credentials import load_credentials
+            from photoreal.portal.torch_cuda import nvidia_smi_ok
 
             apply_env_to_process()
-            if load_credentials().get("runpod_token_set"):
+            has_runpod = bool(load_credentials().get("runpod_token_set"))
+            gpu_ok = nvidia_smi_ok()
+            if should_skip_local_model_download(
+                runpod_token_set=has_runpod, nvidia_ok=gpu_ok
+            ):
                 log(
-                    "skip local model download (Runpod Flash configured — "
+                    "skip local model download (no CUDA; Runpod Flash configured — "
                     "weights live on the Network Volume)",
                     "append",
                 )
                 return
+            if has_runpod and gpu_ok:
+                log(
+                    "download: Runpod key set but CUDA present — "
+                    "ensuring local weights for local generate",
+                    "append",
+                )
         except Exception as exc:  # noqa: BLE001
             log(f"flash download-skip probe failed ({exc}); checking local weights", "append")
 
-        if models_install_satisfied():
-            log("skip (already present): core photoreal_gen model weights", "append")
+        if not launch_model_download_needed():
+            log(
+                "skip (already present): photoreal_gen weights + VLM",
+                "append",
+            )
             return
 
+        reasons: list[str] = []
+        if not models_install_satisfied():
+            gaps = models_missing_parts()
+            preview = "; ".join(gaps[:6]) if gaps else "photoreal_gen incomplete"
+            if len(gaps) > 6:
+                preview += f"; …(+{len(gaps) - 6} more)"
+            reasons.append(preview)
+        if not vlm_weights_present():
+            reasons.append("missing: data/models/vlm/Qwen3-VL-8B-Instruct/")
+        log(f"download: missing weights — {'; '.join(reasons)}", "append")
+        log(
+            "download: running download_models.py --photoreal-gen --vlm …",
+            "append",
+        )
+
+        argv = launch_model_download_argv(py)
         code = _run_logged(
-            [py, str(DOWNLOAD_SCRIPT), "--all"],
+            argv,
             cwd=REPO_ROOT,
             env=env,
             emit=log,
@@ -325,11 +435,13 @@ def run_stage2(
             generation=generation,
         )
         if code != 0:
-            raise RuntimeError(f"step failed ({code}): Download models (--all)")
+            raise RuntimeError(
+                f"step failed ({code}): Download models (photoreal-gen + vlm)"
+            )
 
     step("Install photoreal-gen + vlm extras", install_extras)
     step("Install ComfyUI requirements (curated)", install_comfy)
-    step("Download models (--all)", download_models)
+    step("Download models (photoreal-gen + vlm)", download_models)
 
     _check_cancel(cancel, generation)
     log("=== Starting services (API + Comfy) ===", "append")

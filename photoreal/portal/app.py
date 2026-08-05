@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -18,12 +18,14 @@ from photoreal.portal import character_jobs
 from photoreal.portal import character_inpaint_jobs
 from photoreal.portal import character_pose_lock_jobs
 from photoreal.portal import depth_jobs
+from photoreal.portal import project_store
 from photoreal.portal import sam3_jobs
 from photoreal.portal import voice_vosk
 from photoreal.portal import wan_animate_jobs
+from photoreal.portal.build_id import build_id
 from photoreal.portal.credentials import load_credentials, save_credentials
 from photoreal.portal.paths import WEB_ROOT
-from photoreal.portal.supervisor import dry_run_commands, health_snapshot
+from photoreal.portal.supervisor import dry_run_commands, health_snapshot, restart_comfy
 
 
 class CredentialsIn(BaseModel):
@@ -52,10 +54,12 @@ class CharacterGenerateIn(BaseModel):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Photoreal Portal", version="0.1.0")
+    # Computed once so /api/health stays cheap; Stage-1 compares this to repo build_id().
+    app_build = build_id()
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
-        return {"status": "ok"}
+        return {"status": "ok", "build": app_build}
 
     @app.get("/api/status")
     def status() -> dict[str, Any]:
@@ -76,6 +80,18 @@ def create_app() -> FastAPI:
             },
             "commands_dry_run": dry_run_commands(),
         }
+
+    @app.post("/api/comfy/restart")
+    def post_comfy_restart() -> dict[str, Any]:
+        """Clear stale Comfy sessions/ports and restart until /system_stats is healthy."""
+        result = restart_comfy(timeout=180.0)
+        if not result.get("ok"):
+            raise HTTPException(
+                status_code=503,
+                detail=result.get("error")
+                or "ComfyUI did not become healthy after restart",
+            )
+        return result
 
     @app.get("/api/credentials")
     def get_credentials() -> dict[str, Any]:
@@ -102,6 +118,39 @@ def create_app() -> FastAPI:
         if warn:
             out = {**out, "actions_secrets_warning": warn}
         return out
+
+    @app.get("/api/project")
+    def get_project() -> dict[str, Any]:
+        return project_store.load_project()
+
+    @app.put("/api/project")
+    async def put_project(request: Request) -> dict[str, Any]:
+        try:
+            payload = await request.json()
+        except Exception as e:
+            raise HTTPException(status_code=400, detail="invalid JSON body") from e
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="project body must be an object")
+        try:
+            return project_store.save_project(payload)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.post("/api/project/media")
+    async def post_project_media(
+        file: UploadFile = File(...),
+    ) -> dict[str, str]:
+        raw = await file.read()
+        if not raw:
+            raise HTTPException(status_code=400, detail="empty upload")
+        try:
+            return project_store.save_media(
+                raw,
+                filename=file.filename,
+                content_type=file.content_type,
+            )
+        except (OSError, TypeError, ValueError) as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
     @app.post("/api/launch")
     def post_launch(body: LaunchIn | None = None) -> dict[str, Any]:
@@ -542,32 +591,42 @@ def create_app() -> FastAPI:
     reference_dir = WEB_ROOT / "reference"
     ui_dir = WEB_ROOT / "ui"
 
-    @app.get("/")
-    def index() -> FileResponse:
-        index_path = portal_dir / "index.html"
+    _shell_headers = {
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+
+    def _html_shell(index_path: Path, *, missing: str) -> HTMLResponse:
         if not index_path.is_file():
-            raise HTTPException(status_code=500, detail="portal UI missing")
-        return FileResponse(index_path)
+            raise HTTPException(status_code=500, detail=missing)
+        try:
+            text = index_path.read_text(encoding="utf-8")
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=missing) from e
+        return HTMLResponse(
+            content=text.replace("__BUILD__", app_build),
+            headers=_shell_headers,
+        )
+
+    @app.get("/")
+    def index() -> HTMLResponse:
+        return _html_shell(portal_dir / "index.html", missing="portal UI missing")
 
     @app.get("/timeline")
     @app.get("/timeline/")
-    def timeline() -> FileResponse:
-        index_path = timeline_dir / "index.html"
-        if not index_path.is_file():
-            raise HTTPException(status_code=500, detail="timeline UI missing")
-        return FileResponse(index_path)
+    def timeline() -> HTMLResponse:
+        return _html_shell(timeline_dir / "index.html", missing="timeline UI missing")
 
     @app.get("/character")
     @app.get("/character/")
-    def character_page() -> FileResponse:
-        index_path = character_dir / "index.html"
-        if not index_path.is_file():
-            raise HTTPException(status_code=500, detail="character UI missing")
-        return FileResponse(index_path)
+    def character_page() -> HTMLResponse:
+        return _html_shell(character_dir / "index.html", missing="character UI missing")
 
     character_jobs.ensure_characters_dir()
     sam3_jobs.ensure_sam3_dir()
     depth_jobs.ensure_depth_dir()
+    project_store.ensure_project_dirs()
 
     if ui_dir.is_dir():
         app.mount("/ui", StaticFiles(directory=str(ui_dir)), name="ui")
@@ -591,6 +650,11 @@ def create_app() -> FastAPI:
             StaticFiles(directory=str(reference_dir)),
             name="reference",
         )
+    app.mount(
+        "/project-media",
+        StaticFiles(directory=str(project_store.MEDIA_DIR)),
+        name="project_media",
+    )
     app.mount(
         "/character-outputs",
         StaticFiles(directory=str(character_jobs.CHARACTERS_DIR)),

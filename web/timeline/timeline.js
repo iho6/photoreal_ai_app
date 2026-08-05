@@ -92,11 +92,18 @@
   var actions = document.createElement("div");
   actions.className = "tl-actions";
 
+  function portalBuild() {
+    var meta = document.querySelector('meta[name="portal-build"]');
+    var v = meta && meta.getAttribute("content");
+    return v && v !== "__BUILD__" ? v : String(Date.now());
+  }
+
   function ensureCharacterScripts(cb) {
     if (window.PhotorealCharacter && typeof window.PhotorealCharacter.openModal === "function") {
       cb();
       return;
     }
+    var build = portalBuild();
     var n = 0;
     var failed = false;
     function done(ok) {
@@ -130,16 +137,18 @@
     if (!document.querySelector('link[data-ch-css="1"]')) {
       var link = document.createElement("link");
       link.rel = "stylesheet";
-      link.href = "/character-assets/character.css?v=ch3";
+      link.href = "/character-assets/character.css?v=" + encodeURIComponent(build);
       link.dataset.chCss = "1";
       document.head.appendChild(link);
     }
-    load("/character-assets/gallery.js?v=ch3");
-    load("/character-assets/character.js?v=log-select");
+    load("/character-assets/gallery.js?v=" + encodeURIComponent(build));
+    load("/character-assets/character.js?v=" + encodeURIComponent(build));
   }
 
   function ensureReferenceScripts(cb) {
-    var src = "/reference-assets/record_reference.js?v=rr9";
+    var build = portalBuild();
+    var src =
+      "/reference-assets/record_reference.js?v=" + encodeURIComponent(build);
     if (
       window.PhotorealRecordReference &&
       typeof window.PhotorealRecordReference.openModal === "function" &&
@@ -172,6 +181,85 @@
   var state = M.createState();
   var editor = R.createEditorDom(UI);
   var previewCtl = P.createPreview(preview);
+
+  var saveStatus = document.createElement("div");
+  saveStatus.className = "tl-save-status";
+  saveStatus.setAttribute("aria-live", "polite");
+  saveStatus.textContent = "";
+
+  var saveTimer = null;
+  var saveInFlight = false;
+  var saveQueued = false;
+  var suppressAutosave = true;
+
+  function setSaveStatus(text, isError) {
+    saveStatus.textContent = text || "";
+    saveStatus.style.color = isError ? "var(--pr-danger, #b00020)" : "";
+  }
+
+  function projectApiError(r, j, fallback) {
+    if (r && r.status === 404) {
+      return "Portal API is out of date (no /api/project). Restart the portal, then hard-refresh.";
+    }
+    var detail = j && j.detail;
+    if (typeof detail !== "string") detail = (r && r.statusText) || "";
+    return detail || fallback || "request failed";
+  }
+
+  function putProject(doc) {
+    return fetch("/api/project", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(doc),
+    }).then(function (r) {
+      if (r.status === 404) {
+        throw new Error(projectApiError(r, null, "save failed"));
+      }
+      return r.json().then(function (j) {
+        if (!r.ok) {
+          throw new Error(projectApiError(r, j, "save failed"));
+        }
+        return j;
+      });
+    });
+  }
+
+  function runAutosave() {
+    if (suppressAutosave) return;
+    if (saveInFlight) {
+      saveQueued = true;
+      return;
+    }
+    saveInFlight = true;
+    setSaveStatus("Saving…");
+    M.ensureDurableMedia(state)
+      .then(function () {
+        return putProject(M.serialize(state));
+      })
+      .then(function () {
+        setSaveStatus("Saved");
+      })
+      .catch(function (e) {
+        setSaveStatus("Save failed: " + (e.message || e), true);
+      })
+      .then(function () {
+        saveInFlight = false;
+        if (saveQueued) {
+          saveQueued = false;
+          scheduleAutosave(150);
+        }
+      });
+  }
+
+  function scheduleAutosave(delayMs) {
+    if (suppressAutosave) return;
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(runAutosave, delayMs == null ? 750 : delayMs);
+  }
+
+  M.onChange(state, function () {
+    scheduleAutosave();
+  });
 
   var locationFileInput = document.createElement("input");
   locationFileInput.type = "file";
@@ -251,10 +339,41 @@
       })
     );
   });
+  actions.appendChild(saveStatus);
 
   app.appendChild(previewWrap);
   app.appendChild(actions);
   app.appendChild(editor.root);
 
   I.bindInteractions(editor, state, previewCtl);
+
+  fetch("/api/project")
+    .then(function (r) {
+      if (r.status === 404) {
+        throw new Error(projectApiError(r, null, "load failed"));
+      }
+      return r.json().then(function (j) {
+        if (!r.ok) throw new Error(projectApiError(r, j, "load failed"));
+        return j;
+      });
+    })
+    .then(function (doc) {
+      var hasContent =
+        doc &&
+        doc.timeline &&
+        ((doc.timeline.tracks && doc.timeline.tracks.length) ||
+          (doc.timeline.clips && doc.timeline.clips.length));
+      if (hasContent) {
+        M.hydrate(state, doc);
+        setSaveStatus("Loaded project");
+      } else {
+        setSaveStatus("");
+      }
+    })
+    .catch(function (e) {
+      setSaveStatus("Load failed: " + (e.message || e), true);
+    })
+    .then(function () {
+      suppressAutosave = false;
+    });
 })();

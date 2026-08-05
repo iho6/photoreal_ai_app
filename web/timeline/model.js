@@ -11,6 +11,71 @@
     return (prefix || "id") + "_" + Math.random().toString(36).slice(2, 10);
   }
 
+  function isBlobUrl(url) {
+    return typeof url === "string" && url.indexOf("blob:") === 0;
+  }
+
+  function revokeIfBlob(url) {
+    if (!isBlobUrl(url)) return;
+    try {
+      URL.revokeObjectURL(url);
+    } catch (_) {}
+  }
+
+  function uploadProjectMedia(blobOrFile, filename) {
+    var fd = new FormData();
+    var name =
+      filename ||
+      (blobOrFile && blobOrFile.name) ||
+      "media.bin";
+    fd.append("file", blobOrFile, name);
+    return fetch("/api/project/media", { method: "POST", body: fd }).then(
+      function (r) {
+        if (r.status === 404) {
+          throw new Error(
+            "Portal API is out of date (no /api/project). Restart the portal, then hard-refresh."
+          );
+        }
+        return r.json().then(function (j) {
+          if (!r.ok) {
+            var detail = j && j.detail;
+            if (typeof detail !== "string") detail = r.statusText;
+            throw new Error(detail || "media upload failed");
+          }
+          return j;
+        });
+      }
+    );
+  }
+
+  var DURABLE_URL_FIELDS = [
+    "src",
+    "drivingVideoSrc",
+    "characterStillUrl",
+    "segmentMaskUrl",
+    "segmentFrameUrl",
+    "segmentCutoutUrl",
+    "depthUrl",
+    "inpaintUrl",
+    "poseLockUrl",
+  ];
+
+  function guessUploadName(clip, field, blob) {
+    var base = (clip && clip.name) || field || "media";
+    base = String(base).replace(/[^\w.\-]+/g, "_").slice(0, 64);
+    var type = (blob && blob.type) || "";
+    var ext = "bin";
+    if (type.indexOf("webm") >= 0) ext = "webm";
+    else if (type.indexOf("mp4") >= 0) ext = "mp4";
+    else if (type.indexOf("png") >= 0) ext = "png";
+    else if (type.indexOf("jpeg") >= 0 || type.indexOf("jpg") >= 0) ext = "jpg";
+    else if (type.indexOf("webp") >= 0) ext = "webp";
+    else if (type.indexOf("wav") >= 0) ext = "wav";
+    else if (field === "src" && clip && clip.mediaType === "video") ext = "webm";
+    else if (field === "src" && clip && clip.mediaType === "image") ext = "png";
+    return base + "." + ext;
+  }
+
   function cloneClip(c) {
     return {
       id: c.id,
@@ -108,9 +173,110 @@
       clips: [],
       undoStack: [],
       redoStack: [],
+      characterUsedUrls: [],
       _listeners: [],
       _seq: 0,
     };
+  }
+
+  function noteCharacterUsed(state, url) {
+    if (!state || !url || typeof url !== "string") return;
+    if (isBlobUrl(url)) return;
+    if (!state.characterUsedUrls) state.characterUsedUrls = [];
+    if (state.characterUsedUrls.indexOf(url) >= 0) return;
+    state.characterUsedUrls.push(url);
+  }
+
+  function serialize(state) {
+    var snap = snapshot(state);
+    var used = (state.characterUsedUrls || []).slice();
+    for (var i = 0; i < snap.clips.length; i++) {
+      var c = snap.clips[i];
+      if (
+        c.characterStillUrl &&
+        typeof c.characterStillUrl === "string" &&
+        c.characterStillUrl.indexOf("/character-outputs/") === 0 &&
+        used.indexOf(c.characterStillUrl) < 0
+      ) {
+        used.push(c.characterStillUrl);
+      }
+    }
+    return {
+      version: 1,
+      timeline: {
+        fps: state.fps,
+        pxPerSec: snap.pxPerSec,
+        playhead: snap.playhead,
+        snap: snap.snap,
+        tracks: snap.tracks,
+        clips: snap.clips,
+        selection: snap.selection,
+      },
+      characters: { usedUrls: used },
+    };
+  }
+
+  function hydrate(state, doc) {
+    if (!doc || typeof doc !== "object" || !doc.timeline) return false;
+    var tl = doc.timeline;
+    restore(state, {
+      tracks: Array.isArray(tl.tracks) ? tl.tracks : [],
+      clips: Array.isArray(tl.clips) ? tl.clips : [],
+      selection: tl.selection || null,
+      playhead: tl.playhead != null ? Number(tl.playhead) : 0,
+      pxPerSec: tl.pxPerSec != null ? Number(tl.pxPerSec) : 80,
+      snap: tl.snap == null ? true : !!tl.snap,
+    });
+    if (tl.fps != null && isFinite(Number(tl.fps)) && Number(tl.fps) > 0) {
+      state.fps = Number(tl.fps);
+    }
+    var used =
+      doc.characters && Array.isArray(doc.characters.usedUrls)
+        ? doc.characters.usedUrls.slice()
+        : [];
+    state.characterUsedUrls = used;
+    state.undoStack = [];
+    state.redoStack = [];
+    emit(state, "full");
+    return true;
+  }
+
+  function ensureDurableMedia(state) {
+    var jobs = [];
+    for (var i = 0; i < state.clips.length; i++) {
+      (function (clip) {
+        for (var f = 0; f < DURABLE_URL_FIELDS.length; f++) {
+          var field = DURABLE_URL_FIELDS[f];
+          var url = clip[field];
+          if (!isBlobUrl(url)) continue;
+          jobs.push(
+            fetch(url)
+              .then(function (r) {
+                if (!r.ok) throw new Error("blob fetch failed");
+                return r.blob();
+              })
+              .then(
+                (function (clipRef, fieldName) {
+                  return function (blob) {
+                    return uploadProjectMedia(
+                      blob,
+                      guessUploadName(clipRef, fieldName, blob)
+                    ).then(function (up) {
+                      revokeIfBlob(clipRef[fieldName]);
+                      clipRef[fieldName] = up.url;
+                    });
+                  };
+                })(clip, field)
+              )
+          );
+        }
+      })(state.clips[i]);
+    }
+    if (!jobs.length) return Promise.resolve(false);
+    return Promise.all(jobs).then(function () {
+      emit(state, "full");
+      return true;
+    });
   }
 
   function onChange(state, fn) {
@@ -427,57 +593,61 @@
         : probeMediaDuration(file, "video");
 
     return durPromise.then(function (dur) {
-      pushUndo(state);
-      var track = findReferencesTrack(state);
-      if (!track) {
-        track = {
-          id: uid("trk"),
-          name: "References",
-          locked: false,
-          hidden: false,
-          height: 64,
-        };
-        state.tracks.push(track);
-      }
-      if (track.locked) {
-        emit(state);
-        return null;
-      }
-      var srcDur = Number(meta.sourceDuration);
-      if (!isFinite(srcDur) || srcDur <= 0) srcDur = dur;
-      var inPt = Number(meta.inPoint);
-      if (!isFinite(inPt) || inPt < 0) inPt = 0;
-      if (inPt > srcDur - MIN_CLIP_DURATION) {
-        inPt = Math.max(0, srcDur - MIN_CLIP_DURATION);
-      }
-      var clipDur = Math.max(MIN_CLIP_DURATION, dur);
-      if (inPt + clipDur > srcDur) {
-        clipDur = Math.max(MIN_CLIP_DURATION, srcDur - inPt);
-      }
-      var metaSlot = Number(meta.refSlot);
-      var refSlot =
-        isFinite(metaSlot) && metaSlot >= 1
-          ? Math.floor(metaSlot)
-          : nextRefSlot(state);
-      var clip = {
-        id: uid("clip"),
-        trackId: track.id,
-        name: meta.name || "Reference " + refSlot,
-        mediaType: "video",
-        src: URL.createObjectURL(blob),
-        start: Math.max(0, state.playhead),
-        duration: clipDur,
-        inPoint: inPt,
-        sourceDuration: srcDur,
-        role: "reference",
-        refSlot: refSlot,
-        aspect: meta.aspect || "16:9",
-        mirror: meta.mirror !== false,
-      };
-      state.clips.push(clip);
-      state.selection = { trackId: clip.trackId, clipId: clip.id };
-      emit(state);
-      return clip;
+      return uploadProjectMedia(file, file.name || "reference.webm").then(
+        function (up) {
+          pushUndo(state);
+          var track = findReferencesTrack(state);
+          if (!track) {
+            track = {
+              id: uid("trk"),
+              name: "References",
+              locked: false,
+              hidden: false,
+              height: 64,
+            };
+            state.tracks.push(track);
+          }
+          if (track.locked) {
+            emit(state);
+            return null;
+          }
+          var srcDur = Number(meta.sourceDuration);
+          if (!isFinite(srcDur) || srcDur <= 0) srcDur = dur;
+          var inPt = Number(meta.inPoint);
+          if (!isFinite(inPt) || inPt < 0) inPt = 0;
+          if (inPt > srcDur - MIN_CLIP_DURATION) {
+            inPt = Math.max(0, srcDur - MIN_CLIP_DURATION);
+          }
+          var clipDur = Math.max(MIN_CLIP_DURATION, dur);
+          if (inPt + clipDur > srcDur) {
+            clipDur = Math.max(MIN_CLIP_DURATION, srcDur - inPt);
+          }
+          var metaSlot = Number(meta.refSlot);
+          var refSlot =
+            isFinite(metaSlot) && metaSlot >= 1
+              ? Math.floor(metaSlot)
+              : nextRefSlot(state);
+          var clip = {
+            id: uid("clip"),
+            trackId: track.id,
+            name: meta.name || "Reference " + refSlot,
+            mediaType: "video",
+            src: up.url,
+            start: Math.max(0, state.playhead),
+            duration: clipDur,
+            inPoint: inPt,
+            sourceDuration: srcDur,
+            role: "reference",
+            refSlot: refSlot,
+            aspect: meta.aspect || "16:9",
+            mirror: meta.mirror !== false,
+          };
+          state.clips.push(clip);
+          state.selection = { trackId: clip.trackId, clipId: clip.id };
+          emit(state);
+          return clip;
+        }
+      );
     });
   }
 
@@ -494,12 +664,16 @@
       jobs.push(
         (function (f) {
           return probeMediaDuration(f, "image").then(function (dur) {
-            return {
-              file: f,
-              sourceDuration: dur,
-              src: URL.createObjectURL(f),
-              name: f.name || "location",
-            };
+            return uploadProjectMedia(f, f.name || "location.png").then(
+              function (up) {
+                return {
+                  file: f,
+                  sourceDuration: dur,
+                  src: up.url,
+                  name: f.name || "location",
+                };
+              }
+            );
           });
         })(file)
       );
@@ -610,13 +784,15 @@
       jobs.push(
         (function (f, mediaType) {
           return probeMediaDuration(f, mediaType).then(function (dur) {
-            return {
-              file: f,
-              mediaType: mediaType,
-              sourceDuration: dur,
-              src: URL.createObjectURL(f),
-              name: f.name || mediaType,
-            };
+            return uploadProjectMedia(f, f.name || mediaType).then(function (up) {
+              return {
+                file: f,
+                mediaType: mediaType,
+                sourceDuration: dur,
+                src: up.url,
+                name: f.name || mediaType,
+              };
+            });
           });
         })(file, mt)
       );
@@ -905,6 +1081,12 @@
     emit: emit,
     undo: undo,
     redo: redo,
+    serialize: serialize,
+    hydrate: hydrate,
+    ensureDurableMedia: ensureDurableMedia,
+    noteCharacterUsed: noteCharacterUsed,
+    uploadProjectMedia: uploadProjectMedia,
+    isBlobUrl: isBlobUrl,
     projectDuration: projectDuration,
     timelineWidth: timelineWidth,
     findTrack: findTrack,

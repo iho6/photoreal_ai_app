@@ -39,6 +39,9 @@ runtime/comfyui/models/
 runtime/comfyui/__pycache__/
 runtime/comfyui/.venv/
 
+# Drive-local / portable CPython (Stage-1; not committed)
+runtime/python/
+
 # Flash CLI imports every *.py; any failure aborts deploy.
 # Comfy/Flux live on the Network Volume — not part of the serverless artifact.
 # Tracked files under runtime/ stay in git; new untracked paths are ignored.

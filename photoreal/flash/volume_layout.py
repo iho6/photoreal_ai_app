@@ -69,6 +69,7 @@ def volume_missing_parts(root: Path | str) -> list[str]:
     required_files = (
         (klein / "ae.safetensors", 100_000_000),
         (klein / "flux-2-klein-base-9b.safetensors", 1_000_000_000),
+        (klein / "text_encoder" / "qwen_3_8b.safetensors", 1_000_000_000),
         (loras / "lenovo_flux_klein9b.safetensors", 1_000_000),
         (loras / "mrpopo_photorealistic.safetensors", 1_000_000),
     )
